@@ -1,0 +1,14 @@
+.groq_key
+.email_config
+*.db
+data/
+__pycache__/
+*.pyc
+prospects.xlsx
+~$*.xlsx
+dashboard_settings.json
+exports/
+dedup_results.json
+logs/
+*_log.txt
+*.log
