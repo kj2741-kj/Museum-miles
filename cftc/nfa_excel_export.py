@@ -80,3 +80,55 @@ def export_firms(df: pd.DataFrame, states: list[str], reg_types: list[str]) -> "
     wb.save(path)
 
     return path
+
+
+def export_full_database() -> "Path":
+    """The whole NFA contact database, one row per PRINCIPAL (not per firm)
+    -- mirrors sec/excel_export.py's export_full_database(). NFA has no AUM
+    field (not a CFTC-disclosed concept the way SEC's Form ADV discloses it),
+    so registration type + city/state stand in as the firm-level context.
+    Ignores any dashboard filter -- always the full, current master list."""
+    firms = [dict(r) for r in nfa_db.get_firms()]
+    principals_by_firm: dict[int, list[dict]] = {}
+    for p in nfa_db.get_all_principals():
+        principals_by_firm.setdefault(p["firm_id"], []).append(dict(p))
+
+    rows = []
+    for f in firms:
+        base = {
+            "Firm": f["firm_name"], "Registration Types": f["reg_types"],
+            "City": f["city"], "State": f["state"], "Website": f["website"],
+            "Also SEC-Registered": bool(f["sec_prospect_id"]),
+            "Reg Actions": f["has_reg_actions"], "Status": f.get("crm_stage"),
+        }
+        people = principals_by_firm.get(f["id"], [])
+        if not people:
+            rows.append({**base, "Name": None, "Title": None, "Email": None, "Verified": False, "10%+ Owner": False, "Find This Person": None})
+        for p in people:
+            rows.append({
+                **base, "Name": p["name"], "Title": p["title"], "Email": p["email"],
+                "Verified": bool(p["email_verified"]), "10%+ Owner": bool(p["ten_percent_owner"]),
+                "Find This Person": p["linkedin_profile_url"],
+            })
+
+    cols = [
+        "Firm", "Registration Types", "Name", "Title", "Email", "Verified",
+        "10%+ Owner", "City", "State", "Website", "Also SEC-Registered",
+        "Reg Actions", "Status", "Find This Person",
+    ]
+    out = pd.DataFrame(rows, columns=cols)
+
+    filename = f"nfa_full_contact_database_{date.today().isoformat()}.xlsx"
+    path = EXPORTS_DIR / filename
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        out.to_excel(writer, index=False, sheet_name="All Contacts")
+
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    ws = wb["All Contacts"]
+    for i, col in enumerate(out.columns, start=1):
+        width = max(out[col].astype(str).map(len).max() if len(out) else 0, len(col)) + 2
+        ws.column_dimensions[get_column_letter(i)].width = min(width, 50)
+    wb.save(path)
+
+    return path

@@ -393,11 +393,22 @@ with tab_sec:
         # --- Excel export, same filtered scope as above ---
         st.divider()
         st.subheader("💾 Export to Excel")
-        filename_preview = excel_export.build_filename(state_filter, city_filter, narrowed_aum_range)
-        st.caption(f"Exports the {len(df)} currently filtered prospects to `exports/{filename_preview}`.")
-        if st.button("💾 Export filtered list to Excel"):
-            path = excel_export.export_prospects(df, state_filter, city_filter, narrowed_aum_range)
-            st.success(f"Saved to {path}")
+        export_cols = st.columns(2)
+        with export_cols[0]:
+            filename_preview = excel_export.build_filename(state_filter, city_filter, narrowed_aum_range)
+            st.caption(f"**Current view** — the {len(df)} currently filtered prospects, "
+                       f"2 sheets (Prospects + Additional Contacts).")
+            if st.button("💾 Export current view"):
+                path = excel_export.export_prospects(df, state_filter, city_filter, narrowed_aum_range)
+                st.success(f"Saved to {path}")
+        with export_cols[1]:
+            st.caption("**Full contact database** — every SEC prospect and contact, "
+                       "one row per person, with AUM/City/State on every row for easy "
+                       "filtering in Excel. Ignores the filters above; always the full list.")
+            if st.button("💾 Export full contact database"):
+                with st.spinner("Building full export (this can take a minute — 60k+ rows)..."):
+                    path = excel_export.export_full_database()
+                st.success(f"Saved to {path}")
 
         # --- Duplicate review (Phase 2 LLM dedup) — hidden while the LLM toggle is off ---
         if llm_enabled:
@@ -585,8 +596,19 @@ with tab_nfa:
         # --- Excel export, same filtered scope as above ---
         st.divider()
         st.subheader("💾 Export to Excel")
-        nfa_filename_preview = nfa_excel_export.build_filename(nfa_state_filter, reg_type_filter)
-        st.caption(f"Exports the {len(nfa_df)} currently filtered NFA firms (+ their principals) to `exports/{nfa_filename_preview}`.")
-        if st.button("💾 Export filtered NFA list to Excel"):
-            path = nfa_excel_export.export_firms(nfa_df, nfa_state_filter, reg_type_filter)
-            st.success(f"Saved to {path}")
+        nfa_export_cols = st.columns(2)
+        with nfa_export_cols[0]:
+            nfa_filename_preview = nfa_excel_export.build_filename(nfa_state_filter, reg_type_filter)
+            st.caption(f"**Current view** — the {len(nfa_df)} currently filtered NFA firms, "
+                       f"2 sheets (Firms + Principals).")
+            if st.button("💾 Export current view", key="nfa_export_current"):
+                path = nfa_excel_export.export_firms(nfa_df, nfa_state_filter, reg_type_filter)
+                st.success(f"Saved to {path}")
+        with nfa_export_cols[1]:
+            st.caption("**Full contact database** — every NFA firm and principal, one row "
+                       "per person, with City/State on every row for easy filtering. "
+                       "Ignores the filters above; always the full list.")
+            if st.button("💾 Export full contact database", key="nfa_export_full"):
+                with st.spinner("Building full export..."):
+                    path = nfa_excel_export.export_full_database()
+                st.success(f"Saved to {path}")

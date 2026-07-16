@@ -102,3 +102,70 @@ def export_prospects(df: pd.DataFrame, states: list[str], cities: list[str], aum
     wb.save(path)
 
     return path
+
+
+def _autofit(path, sheet_name: str, sheet_df: pd.DataFrame) -> None:
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    ws = wb[sheet_name]
+    for i, col in enumerate(sheet_df.columns, start=1):
+        width = max(sheet_df[col].astype(str).map(len).max() if len(sheet_df) else 0, len(col)) + 2
+        ws.column_dimensions[get_column_letter(i)].width = min(width, 50)
+    wb.save(path)
+
+
+def export_full_database() -> "Path":
+    """The whole SEC contact database, one row per CONTACT (not per firm) --
+    every primary AND secondary contact gets its own row, each carrying the
+    firm's AUM/location/website alongside it, so Mayank can filter/sort by
+    AUM or state directly in Excel without cross-referencing a second sheet.
+    Unlike export_prospects(), this ignores the dashboard's current filter --
+    it's the full, always-current master list, not a scoped cut."""
+    prospects = [dict(r) for r in db.get_all_prospects()]
+    contacts_by_prospect: dict[int, list[dict]] = {}
+    for c in db.get_all_contacts():
+        contacts_by_prospect.setdefault(c["prospect_id"], []).append(dict(c))
+
+    rows = []
+    for p in prospects:
+        base = {
+            "Firm": p["firm_name"], "Type": p["prospect_type"], "AUM": formatting.format_aum(p["aum"]),
+            "City": p["hq_city"], "State": p["hq_state"], "Website": p["website"],
+            "CRD": p.get("crd_number"), "Status": p["status"],
+        }
+        if p["contact_name"] or p["email"]:
+            rows.append({
+                **base, "Contact": p["contact_name"], "Title": p["contact_title"],
+                "Email": p["email"], "Verified": bool(p["email_verified"]),
+                "Email Source": p["email_source"], "Is Primary Contact": True,
+                "Find This Person": p["linkedin_profile_url"],
+            })
+        for c in contacts_by_prospect.get(p["id"], []):
+            rows.append({
+                **base, "Contact": c["contact_name"], "Title": c["contact_title"],
+                "Email": c["email"], "Verified": bool(c["email_verified"]),
+                "Email Source": c["email_source"], "Is Primary Contact": False,
+                "Find This Person": c["linkedin_profile_url"],
+            })
+        if not p["contact_name"] and not p["email"] and not contacts_by_prospect.get(p["id"]):
+            # No contact found at all for this firm -- still worth listing
+            # (AUM/location alone is useful), just with blank contact fields.
+            rows.append({
+                **base, "Contact": None, "Title": None, "Email": None,
+                "Verified": False, "Email Source": None, "Is Primary Contact": False,
+                "Find This Person": None,
+            })
+
+    cols = [
+        "Firm", "Type", "Contact", "Title", "Email", "Verified", "Email Source",
+        "Is Primary Contact", "AUM", "City", "State", "Website", "CRD", "Status", "Find This Person",
+    ]
+    out = pd.DataFrame(rows, columns=cols)
+
+    filename = f"sec_full_contact_database_{date.today().isoformat()}.xlsx"
+    path = EXPORTS_DIR / filename
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        out.to_excel(writer, index=False, sheet_name="All Contacts")
+    _autofit(path, "All Contacts", out)
+
+    return path
