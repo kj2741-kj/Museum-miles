@@ -148,6 +148,18 @@ _WEBSITE_RE = re.compile(r"(?:https?://|www\.)[a-zA-Z0-9][a-zA-Z0-9\-.]*\.[a-zA-
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 # Boilerplate domains that show up in the SEC-required disclaimer text, not the firm's own site.
 _NON_FIRM_DOMAINS = {"sec.gov", "adviserinfo.sec.gov", "iard.com", "finra.org"}
+# Exact-match alone misses PDF-extraction variants of the same regulatory
+# domain (found live 2026-07-16: "advisorinfo.sec.gov" typo'd extraction,
+# "adviser.sec.gov" missing "info" -- both slipped through as if they were a
+# real firm's own site, producing garbage like "info@advisorinfo.sec.gov").
+# A suffix check on "sec.gov" catches any such variant at once.
+_NON_FIRM_DOMAIN_SUFFIXES = ("sec.gov",)
+
+
+def _is_non_firm_domain(domain: str) -> bool:
+    return domain in _NON_FIRM_DOMAINS or any(
+        domain == suffix or domain.endswith("." + suffix) for suffix in _NON_FIRM_DOMAIN_SUFFIXES
+    )
 
 
 # Real bug found live (Psi Capital Management, 2026-07-13): blindly taking
@@ -341,7 +353,7 @@ def extract_part2b_people(text: str) -> list[tuple[str, str, str]]:
         window_text = " ".join(lines[j + 1:window_end])
         for m in _EMAIL_RE.finditer(window_text):
             candidate = m.group(0).lower()
-            if ".." in candidate or candidate.split("@")[-1] in _NON_FIRM_DOMAINS:
+            if ".." in candidate or _is_non_firm_domain(candidate.split("@")[-1]):
                 continue
             email = candidate
             break
@@ -435,7 +447,7 @@ def extract_firm_contact(text: str) -> dict:
         if len(re.findall(r"\.(?:com|net|org|io|co|biz|us)\b", url, re.I)) > 1:
             continue
         domain = url.lower().replace("https://", "").replace("http://", "").replace("www.", "").rstrip("/")
-        if domain not in _NON_FIRM_DOMAINS:
+        if not _is_non_firm_domain(domain):
             out["website"] = url if url.lower().startswith("http") else f"http://{url}"
             break
 
@@ -443,7 +455,7 @@ def extract_firm_contact(text: str) -> dict:
         email = m.group(0).lower()
         if ".." in email:
             continue
-        if email.split("@")[-1] not in _NON_FIRM_DOMAINS:
+        if not _is_non_firm_domain(email.split("@")[-1]):
             out["email"] = email
             break
 

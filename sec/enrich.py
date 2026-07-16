@@ -72,6 +72,23 @@ _NON_FIRM_DOMAINS = {
     "youtube.com", "wikipedia.org", "bloomberg.com", "crunchbase.com",
 }
 
+# Regulatory-site domains SEC brochures reference in their own required
+# disclosure boilerplate (e.g. "see www.adviserinfo.sec.gov") -- PDF text
+# extraction doesn't always render this identically across documents (font/
+# kerning quirks), so real live variants found include "adviserinfo.sec.gov",
+# "advisorinfo.sec.gov" (typo'd extraction), and "adviser.sec.gov" (missing
+# "info"). An exact-match blocklist misses whichever variant it wasn't
+# updated for; a suffix check on "sec.gov" catches all of them at once,
+# found live 2026-07-16 via a direct-reproduction test on stuck records
+# (e.g. "info@advisorinfo.sec.gov" guessed for Jacobs & Company LLC).
+_NON_FIRM_DOMAIN_SUFFIXES = ("sec.gov",)
+
+
+def _is_non_firm_domain(domain: str) -> bool:
+    return domain in _NON_FIRM_DOMAINS or any(
+        domain == suffix or domain.endswith("." + suffix) for suffix in _NON_FIRM_DOMAIN_SUFFIXES
+    )
+
 
 # Some ADV filers put descriptive text in the "website" field instead of a
 # real URL (e.g. "www.guidestone.org  (organization web site that contains
@@ -91,7 +108,7 @@ def _domain_of(website: str | None) -> str | None:
     base = website if website.lower().startswith("http") else f"http://{website}"
     parsed = urlparse(base)
     domain = (parsed.netloc or parsed.path.split("/")[0]).lower().replace("www.", "")
-    if not domain or domain in _NON_FIRM_DOMAINS:
+    if not domain or _is_non_firm_domain(domain):
         return None
     if not _DOMAIN_RE.match(domain) or any(len(label) > 63 for label in domain.split(".")):
         return None
