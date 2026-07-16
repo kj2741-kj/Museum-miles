@@ -9,7 +9,7 @@ from datetime import datetime
 from sec import db
 from sec import smtp_review
 
-LOG_PATH = "run_smtp_review_log.txt"
+LOG_PATH = "logs/sec/run_smtp_review_log.txt"
 
 
 def log(msg: str) -> None:

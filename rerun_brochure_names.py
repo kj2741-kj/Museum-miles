@@ -19,7 +19,7 @@ from datetime import datetime
 from sec import db
 from sec import enrich
 
-LOG_PATH = "rerun_brochure_names_log.txt"
+LOG_PATH = "logs/sec/rerun_brochure_names_log.txt"
 
 
 def log(msg: str) -> None:

@@ -8,7 +8,7 @@ from datetime import datetime
 from cftc import nfa_db
 from cftc import nfa_deregistration
 
-LOG_PATH = "run_nfa_deregistration_log.txt"
+LOG_PATH = "logs/cftc/run_nfa_deregistration_log.txt"
 MAX_ERROR_RATE = 0.05  # >5% of terms failing means the sweep itself is unreliable right now
 
 

@@ -8,7 +8,7 @@ from datetime import datetime
 from cftc import nfa_db
 from cftc import nfa_full_resync
 
-LOG_PATH = "run_nfa_full_resync_log.txt"
+LOG_PATH = "logs/cftc/run_nfa_full_resync_log.txt"
 MAX_ERROR_RATE = 0.05
 
 

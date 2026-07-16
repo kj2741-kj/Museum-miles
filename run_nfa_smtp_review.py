@@ -6,7 +6,7 @@ from datetime import datetime
 from cftc import nfa_db
 from cftc import nfa_smtp_review
 
-LOG_PATH = "run_nfa_smtp_review_log.txt"
+LOG_PATH = "logs/cftc/run_nfa_smtp_review_log.txt"
 
 
 def log(msg: str) -> None:

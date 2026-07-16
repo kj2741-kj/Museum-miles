@@ -9,7 +9,7 @@ from datetime import datetime
 from cftc import nfa_db
 from cftc import nfa_enrich
 
-LOG_PATH = "run_nfa_enrichment_log.txt"
+LOG_PATH = "logs/cftc/run_nfa_enrichment_log.txt"
 
 
 def log(msg: str) -> None:
