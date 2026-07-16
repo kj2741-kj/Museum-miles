@@ -149,17 +149,21 @@ _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 # Boilerplate domains that show up in the SEC-required disclaimer text, not the firm's own site.
 _NON_FIRM_DOMAINS = {"sec.gov", "adviserinfo.sec.gov", "iard.com", "finra.org"}
 # Exact-match alone misses PDF-extraction variants of the same regulatory
-# domain (found live 2026-07-16: "advisorinfo.sec.gov" typo'd extraction,
-# "adviser.sec.gov" missing "info" -- both slipped through as if they were a
-# real firm's own site, producing garbage like "info@advisorinfo.sec.gov").
-# A suffix check on "sec.gov" catches any such variant at once.
-_NON_FIRM_DOMAIN_SUFFIXES = ("sec.gov",)
+# domain. Real live cases found 2026-07-16: "advisorinfo.sec.gov" (typo'd
+# extraction), "adviser.sec.gov" (missing "info") -- a suffix check on
+# "sec.gov" catches those. But a THIRD case slipped past even the suffix
+# check: "adviserinfo.sec.gov.The" -- the source PDF text had no space after
+# the period before the next sentence ("...sec.gov. The information..."),
+# so the domain-shaped regex greedily consumed "The" as if it were another
+# label. A suffix check requires the string to END in "sec.gov"; this one
+# doesn't. Switched to substring containment instead -- no legitimate firm
+# domain would ever contain "sec.gov" for any other reason, so this is safe
+# and robust against whatever gets glued on after.
+_NON_FIRM_DOMAIN_MARKERS = ("sec.gov",)
 
 
 def _is_non_firm_domain(domain: str) -> bool:
-    return domain in _NON_FIRM_DOMAINS or any(
-        domain == suffix or domain.endswith("." + suffix) for suffix in _NON_FIRM_DOMAIN_SUFFIXES
-    )
+    return domain in _NON_FIRM_DOMAINS or any(marker in domain for marker in _NON_FIRM_DOMAIN_MARKERS)
 
 
 # Real bug found live (Psi Capital Management, 2026-07-13): blindly taking

@@ -76,18 +76,19 @@ _NON_FIRM_DOMAINS = {
 # disclosure boilerplate (e.g. "see www.adviserinfo.sec.gov") -- PDF text
 # extraction doesn't always render this identically across documents (font/
 # kerning quirks), so real live variants found include "adviserinfo.sec.gov",
-# "advisorinfo.sec.gov" (typo'd extraction), and "adviser.sec.gov" (missing
-# "info"). An exact-match blocklist misses whichever variant it wasn't
-# updated for; a suffix check on "sec.gov" catches all of them at once,
-# found live 2026-07-16 via a direct-reproduction test on stuck records
-# (e.g. "info@advisorinfo.sec.gov" guessed for Jacobs & Company LLC).
-_NON_FIRM_DOMAIN_SUFFIXES = ("sec.gov",)
+# "advisorinfo.sec.gov" (typo'd extraction), "adviser.sec.gov" (missing
+# "info"), and "adviserinfo.sec.gov.The" (no space before the next sentence,
+# so the domain-shaped regex glued the next word on). A suffix check catches
+# the first three but not the fourth (doesn't END in "sec.gov"); substring
+# containment catches all of them, since no legitimate firm domain would
+# ever contain "sec.gov" for any other reason. Found live 2026-07-16 via a
+# direct-reproduction test on stuck records (e.g. "info@advisorinfo.sec.gov"
+# guessed for Jacobs & Company LLC).
+_NON_FIRM_DOMAIN_MARKERS = ("sec.gov",)
 
 
 def _is_non_firm_domain(domain: str) -> bool:
-    return domain in _NON_FIRM_DOMAINS or any(
-        domain == suffix or domain.endswith("." + suffix) for suffix in _NON_FIRM_DOMAIN_SUFFIXES
-    )
+    return domain in _NON_FIRM_DOMAINS or any(marker in domain for marker in _NON_FIRM_DOMAIN_MARKERS)
 
 
 # Some ADV filers put descriptive text in the "website" field instead of a
