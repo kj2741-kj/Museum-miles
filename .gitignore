@@ -1,6 +1,11 @@
 .groq_key
 .email_config
 *.db
+# Exception (2026-07-16): committed on purpose so the Streamlit Cloud
+# deployment has real data to show -- explicit user decision, repo is
+# private specifically because of this.
+!prospects.db
+!nfa_prospects.db
 data/
 __pycache__/
 *.pyc
