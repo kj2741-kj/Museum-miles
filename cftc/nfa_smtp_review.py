@@ -45,6 +45,17 @@ def _review_one(email: str, name: str | None, website: str | None) -> dict:
     return out
 
 
+def reset_unverified_for_recheck() -> int:
+    """See sec/smtp_review.py's twin function -- same rationale, applied to
+    nfa_principals. Returns the count reset."""
+    with nfa_db.get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE nfa_principals SET smtp_reviewed = 0 "
+            "WHERE email IS NOT NULL AND email_verified = 0 AND smtp_reviewed = 1"
+        )
+        return cur.rowcount
+
+
 def collect_review_tasks() -> list[dict]:
     tasks = []
     for p in nfa_db.get_all_principals():

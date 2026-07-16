@@ -59,6 +59,28 @@ def _review_one(email: str, name: str | None, website: str | None) -> dict:
     return out
 
 
+def reset_unverified_for_recheck() -> int:
+    """Clears smtp_reviewed on every contact that has an email but was never
+    confirmed -- "reviewed, unverified" isn't necessarily wrong, mail servers
+    often just don't answer a first attempt (temporary block, greylisting,
+    server hiccup). Meant to be called periodically (see
+    run_weekly_smtp_recheck.py) so these get a fresh shot rather than staying
+    permanently unconfirmed after one try. Returns the count reset."""
+    n = 0
+    with db.get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE prospects SET smtp_reviewed = 0 "
+            "WHERE email IS NOT NULL AND email_verified = 0 AND smtp_reviewed = 1"
+        )
+        n += cur.rowcount
+        cur = conn.execute(
+            "UPDATE prospect_contacts SET smtp_reviewed = 0 "
+            "WHERE email IS NOT NULL AND email_verified = 0 AND smtp_reviewed = 1"
+        )
+        n += cur.rowcount
+    return n
+
+
 def collect_review_tasks() -> list[dict]:
     tasks = []
     for p in db.get_all_prospects():

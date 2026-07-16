@@ -181,6 +181,20 @@ def task_log_shows_done(log_file_name: str) -> bool:
 
 
 def main() -> None:
+    # Real bug found live 2026-07-16 (portability test, fresh DB with no
+    # schema yet): every other entry-point script in this project calls
+    # db.init_db()/nfa_db.init_db() before touching the database, but this
+    # orchestrator never did -- on a genuinely fresh setup (a new machine,
+    # no prior enrichment runs), SMTP_HAS_WORK_CHECK's first call would hit
+    # "sqlite3.OperationalError: no such table: prospects", unhandled, and
+    # crash the whole orchestrator on its very first cycle. Invisible on an
+    # already-populated database (which is why this went unnoticed all
+    # night), fatal on a fresh one.
+    from sec import db
+    from cftc import nfa_db
+    db.init_db()
+    nfa_db.init_db()
+
     state = load_state()
     log(f"Orchestrator started -- resuming state: {state}")
 

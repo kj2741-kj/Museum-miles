@@ -6,6 +6,7 @@
 # private specifically because of this.
 !prospects.db
 !nfa_prospects.db
+*.db-journal
 data/
 __pycache__/
 *.pyc
