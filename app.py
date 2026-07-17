@@ -15,6 +15,8 @@ from sec import ingest_sec_adv
 from cftc import nfa_db
 from cftc import nfa_excel_export
 from core import settings
+from core import linkedin_url
+from core import linkedin_override
 
 ENRICH_BATCH_CAP = 200  # keep a single click bounded; re-click to continue
 
@@ -28,18 +30,19 @@ st.title("🖼️ Museum Mile Funds — Prospecting Dashboard")
 with st.sidebar:
     st.header("🤖 LLM Features")
     llm_enabled = st.toggle(
-        "Enable LLM-powered duplicate detection",
+        "Enable LLM-powered features",
         value=settings.get("llm_enabled"),
         help="Uses Groq (cloud, needs an API key) with local Ollama as a "
-             "fallback. Only affects duplicate detection — email discovery "
-             "and verification never use an LLM. Off by default until "
+             "fallback. Covers duplicate detection and parsing LinkedIn "
+             "name-mismatch corrections you type in. Email discovery and "
+             "verification never use an LLM. Off by default until "
              "Groq/Ollama is set up and confirmed working.",
     )
     if llm_enabled != settings.get("llm_enabled"):
         settings.set("llm_enabled", llm_enabled)
         st.rerun()
     if not llm_enabled:
-        st.caption("Duplicate review is hidden while this is off.")
+        st.caption("Duplicate review and LinkedIn-correction saving are hidden while this is off.")
 
     st.divider()
     st.header("SEC ADV Data")
@@ -297,6 +300,53 @@ with tab_sec:
                         "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
                     },
                 )
+
+            # --- LinkedIn mismatch correction for the selected firm ---
+            # A human has already confirmed the real name/firm on a live
+            # LinkedIn account; the LLM's only job is parsing that free-text
+            # description into a structured value -- see
+            # core/linkedin_override.py for why this is safe where guessing
+            # a brand name from scratch wouldn't be.
+            if llm_enabled:
+                st.markdown("**Spotted a LinkedIn mismatch for this firm?**")
+                correction_text = st.text_area(
+                    "Describe it — e.g. \"the firm is called The Suby Group on "
+                    "LinkedIn\" or \"he goes by Brad Benz\"",
+                    key="sec_linkedin_correction_text",
+                )
+                if st.button("💾 Save correction", key="sec_linkedin_correction_save"):
+                    if not correction_text.strip():
+                        st.warning("Type a description first.")
+                    else:
+                        with st.spinner("Parsing correction..."):
+                            parsed = linkedin_override.parse_correction(
+                                selected_firm, selected_row.get("contact_name"), correction_text.strip(),
+                            )
+                        if parsed["model"] == "none":
+                            st.error("LLM unavailable (Groq/Ollama both failed) — try again later.")
+                        elif not parsed["firm_override"] and not parsed["person_override"]:
+                            st.warning("Couldn't extract a correction from that text — try rephrasing.")
+                        else:
+                            hq_state = selected_row.get("hq_state")
+                            effective_firm = parsed["firm_override"] or selected_firm
+                            effective_person = parsed["person_override"] or selected_row.get("contact_name")
+                            update_fields = {"linkedin_search_url": linkedin_url.build_search_url(effective_firm, hq_state)}
+                            if parsed["firm_override"]:
+                                update_fields["linkedin_firm_override"] = parsed["firm_override"]
+                            if parsed["person_override"]:
+                                update_fields["linkedin_person_override"] = parsed["person_override"]
+                            if effective_person and pd.notna(selected_row.get("contact_name")):
+                                update_fields["linkedin_profile_url"] = linkedin_url.build_person_url(effective_person, effective_firm, hq_state)
+                            db.update_prospect(selected_id, **update_fields)
+                            st.success(
+                                f"Saved (parsed via {parsed['model']}) — "
+                                f"firm: {parsed['firm_override'] or '(unchanged)'}, "
+                                f"person: {parsed['person_override'] or '(unchanged)'}. "
+                                "This will keep applying even after future re-enrichment."
+                            )
+                            st.rerun()
+            else:
+                st.caption("Turn on \"Enable LLM-powered features\" in the sidebar to correct a LinkedIn mismatch.")
 
         # --- Enrichment, scoped to whatever is currently filtered above ---
         # Only ever-untried prospects — previously-tried-and-failed ones (status
@@ -622,6 +672,67 @@ with tab_nfa:
                         "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
                     },
                 )
+
+            # --- LinkedIn mismatch correction for the selected firm ---
+            # Same mechanism as the SEC tab (see core/linkedin_override.py) --
+            # a firm can have several principals here, so the correction also
+            # needs to say which one (if any) a person-name fix applies to.
+            selected_nfa_row = nfa_df.loc[nfa_df["firm_name"] == selected_nfa_firm].iloc[0]
+            if llm_enabled:
+                st.markdown("**Spotted a LinkedIn mismatch for this firm?**")
+                principal_dicts = [dict(r) for r in firm_principals]
+                principal_choice = None
+                if principal_dicts:
+                    principal_choice = st.selectbox(
+                        "Which principal does a person-name correction apply to? "
+                        "(leave as firm-name-only if it's just the firm's public/DBA name)",
+                        options=["(firm name only)"] + [p["name"] for p in principal_dicts],
+                        key="nfa_correction_principal_select",
+                    )
+                    if principal_choice == "(firm name only)":
+                        principal_choice = None
+                nfa_correction_text = st.text_area(
+                    "Describe it — e.g. \"the firm is called X on LinkedIn\" or \"he goes by Y\"",
+                    key="nfa_linkedin_correction_text",
+                )
+                if st.button("💾 Save correction", key="nfa_linkedin_correction_save"):
+                    if not nfa_correction_text.strip():
+                        st.warning("Type a description first.")
+                    else:
+                        with st.spinner("Parsing correction..."):
+                            parsed = linkedin_override.parse_correction(
+                                selected_nfa_firm, principal_choice, nfa_correction_text.strip(),
+                            )
+                        if parsed["model"] == "none":
+                            st.error("LLM unavailable (Groq/Ollama both failed) — try again later.")
+                        elif not parsed["firm_override"] and not parsed["person_override"]:
+                            st.warning("Couldn't extract a correction from that text — try rephrasing.")
+                        else:
+                            hq_state = selected_nfa_row.get("state")
+                            effective_firm = parsed["firm_override"] or selected_nfa_firm
+                            if parsed["firm_override"]:
+                                nfa_db.update_firm(selected_nfa_id, linkedin_firm_override=parsed["firm_override"])
+                            if parsed["person_override"] and principal_choice:
+                                p = next(p for p in principal_dicts if p["name"] == principal_choice)
+                                new_url = linkedin_url.build_person_url(parsed["person_override"], effective_firm, hq_state)
+                                nfa_db.update_principal(p["id"], linkedin_person_override=parsed["person_override"], linkedin_profile_url=new_url)
+                            elif parsed["firm_override"]:
+                                # A firm-name-only correction still changes every
+                                # principal's search URL -- regenerate them all now
+                                # instead of waiting for a future re-enrichment pass.
+                                for p in principal_dicts:
+                                    person_name = p.get("linkedin_person_override") or p["name"]
+                                    new_url = linkedin_url.build_person_url(person_name, effective_firm, hq_state)
+                                    nfa_db.update_principal(p["id"], linkedin_profile_url=new_url)
+                            st.success(
+                                f"Saved (parsed via {parsed['model']}) — "
+                                f"firm: {parsed['firm_override'] or '(unchanged)'}, "
+                                f"person: {parsed['person_override'] or '(unchanged)'}. "
+                                "This will keep applying even after future re-enrichment."
+                            )
+                            st.rerun()
+            else:
+                st.caption("Turn on \"Enable LLM-powered features\" in the sidebar to correct a LinkedIn mismatch.")
 
         # --- Excel export, same filtered scope as above ---
         st.divider()

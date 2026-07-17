@@ -40,6 +40,49 @@ _LEGAL_SUFFIX_RE = re.compile(
 # Same suffix set iapd.py's _person_dedup_key already uses.
 _NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
 
+# Common formal-first-name -> nickname(s) people actually use on their own
+# LinkedIn profile instead of the SEC-filed formal name (e.g. "Bradley Benz"
+# filed with the SEC, "Brad Benz" on LinkedIn — real case reported
+# 2026-07-17). Bounded, verified-by-inspection list, same philosophy as
+# _GEO_URNS: only include pairs we're confident are genuinely common,
+# rather than an LLM/algorithmic guess that could invent a wrong nickname
+# nobody uses. Used to OR-expand the query, never to replace the formal
+# name outright, so a wrong/missing mapping only costs recall, never
+# breaks a search that would otherwise have worked.
+_NICKNAMES = {
+    "bradley": ["brad"], "robert": ["rob", "bob"], "william": ["will", "bill"],
+    "richard": ["rick", "rich"], "michael": ["mike"], "christopher": ["chris"],
+    "matthew": ["matt"], "daniel": ["dan"], "david": ["dave"],
+    "james": ["jim"], "thomas": ["tom"], "charles": ["chuck", "charlie"],
+    "joseph": ["joe"], "edward": ["ed"], "jonathan": ["jon"],
+    "nicholas": ["nick"], "alexander": ["alex"], "benjamin": ["ben"],
+    "andrew": ["andy", "drew"], "anthony": ["tony"], "kenneth": ["ken"],
+    "steven": ["steve"], "stephen": ["steve"], "timothy": ["tim"],
+    "patrick": ["pat"], "jeffrey": ["jeff"], "gregory": ["greg"],
+    "douglas": ["doug"], "samuel": ["sam"], "raymond": ["ray"],
+    "lawrence": ["larry"], "frederick": ["fred"], "theodore": ["ted"],
+    "vincent": ["vince"], "nathaniel": ["nathan", "nate"],
+    "jennifer": ["jen"], "katherine": ["kate", "katie"], "catherine": ["kate", "katie"],
+    "margaret": ["meg", "maggie", "peggy"], "deborah": ["deb"],
+    "cynthia": ["cindy"], "rebecca": ["becky"], "susan": ["sue"],
+    "patricia": ["pat", "patty"], "barbara": ["barb"], "victoria": ["vicki"],
+    "stephanie": ["steph"], "jacqueline": ["jackie"], "gerald": ["gerry", "jerry"],
+    "harold": ["harry"], "donald": ["don"], "ronald": ["ron"],
+    "russell": ["russ"], "walter": ["walt"], "albert": ["al"],
+    "arthur": ["art"], "eugene": ["gene"], "francis": ["frank"],
+    "leonard": ["leo", "len"], "philip": ["phil"],
+}
+
+# Stopwords that make a useless anchor keyword when they land as the "first
+# significant word" of a firm name (e.g. "The Suby Group" -> "The" instead
+# of "Suby" — real case reported 2026-07-17).
+_STOPWORDS = {"the", "a", "an"}
+
+
+def _firm_token(firm_name: str) -> str:
+    words = [w for w in _clean_firm_name(firm_name).split() if w.lower() not in _STOPWORDS]
+    return words[0] if words else ""
+
 
 def _first_last_name(name: str) -> str:
     """First + last word only. LinkedIn's exact-phrase match on the full
@@ -109,9 +152,26 @@ def build_person_url(person_name: str, firm_name: str, hq_state: str | None = No
     vehicle they happen to be a listed principal of. Using only the firm's
     first significant word, unquoted, keeps enough relevance filtering
     without that false-negative: "Greenlight" alone still matches a profile
-    that says "Greenlight Capital"."""
-    firm_token = _clean_firm_name(firm_name).split()[0] if _clean_firm_name(firm_name) else ""
-    keywords = f'"{_first_last_name(person_name)}"'
+    that says "Greenlight Capital".
+
+    Nickname handling (real case 2026-07-17): "Bradley Benz" filed with the
+    SEC, "Brad Benz" on his actual LinkedIn profile. LinkedIn ANDs
+    space-separated keywords (same lesson as the old title-keyword bug), so
+    an explicit OR-group covering both forms is needed, not just the formal
+    name — see _NICKNAMES."""
+    first_last = _first_last_name(person_name)
+    name_parts = first_last.split()
+    if len(name_parts) >= 2:
+        first, last = name_parts[0], name_parts[-1]
+        nicknames = _NICKNAMES.get(first.lower())
+        if nicknames:
+            variants = " OR ".join(f'"{n.capitalize()} {last}"' for n in [first] + nicknames)
+            keywords = f"({variants})"
+        else:
+            keywords = f'"{first_last}"'
+    else:
+        keywords = f'"{first_last}"'
+    firm_token = _firm_token(firm_name)
     if firm_token:
         keywords += f" {firm_token}"
     params = {"keywords": keywords, "origin": "GLOBAL_SEARCH_HEADER"}

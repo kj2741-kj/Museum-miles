@@ -87,6 +87,10 @@ _MIGRATIONS = [
     # side's 7-stage prospects.status semantics but kept separate so the
     # pipeline-progress meaning of nfa_firms.status is never disturbed.
     "ALTER TABLE nfa_firms ADD COLUMN crm_stage TEXT DEFAULT 'New'",
+    # Same user-confirmed LinkedIn correction mechanism as prospects.db
+    # (see sec/db.py's migration comment + core/linkedin_override.py).
+    "ALTER TABLE nfa_firms ADD COLUMN linkedin_firm_override TEXT",
+    "ALTER TABLE nfa_principals ADD COLUMN linkedin_person_override TEXT",
 ]
 
 

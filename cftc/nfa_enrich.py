@@ -275,7 +275,11 @@ def enrich_firm(firm: dict, principals: list[dict], sec_crossref: dict[str, str]
             })
             continue
 
-        linkedin_profile_url = linkedin_url.build_person_url(p["name"], firm["firm_name"], firm.get("state"))
+        # User-confirmed corrections (core/linkedin_override.py) take priority
+        # over the filed name so they survive a future re-enrichment pass.
+        linkedin_firm_name = firm.get("linkedin_firm_override") or firm["firm_name"]
+        linkedin_person_name = p.get("linkedin_person_override") or p["name"]
+        linkedin_profile_url = linkedin_url.build_person_url(linkedin_person_name, linkedin_firm_name, firm.get("state"))
 
         scraped_match = _match_scraped_to_principal(scraped, p["name"], firm["firm_name"]) if scraped else None
         if scraped_match:

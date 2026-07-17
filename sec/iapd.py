@@ -475,13 +475,16 @@ _MAX_PEOPLE_PER_FIRM = 10
 _NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
 
 
-def _person_dedup_key(name: str) -> str:
+def person_dedup_key(name: str) -> str:
     """First + last word only (suffixes like Jr./III stripped, middle
     names/initials ignored) — Part 2B and the individual-search API often
     format the same person's name differently (e.g. "Alan N. Hoffman" vs.
     "Alan Nathan Hoffman", "David Vigil" vs. "David James Vigil"); found
     live across 2 of the first 4 real firms tested, common enough that
-    exact-string dedup isn't good enough."""
+    exact-string dedup isn't good enough. Public (not `_`-prefixed) since
+    db.py also uses this to match a secondary contact across a full
+    re-enrichment pass, so a saved LinkedIn override survives even though
+    the row itself gets deleted and reinserted (2026-07-17)."""
     words = [w.strip(".,").lower() for w in name.split()]
     words = [w for w in words if w not in _NAME_SUFFIXES]
     if len(words) < 2:
@@ -509,7 +512,7 @@ def lookup_brochure(crd: str | None) -> dict:
 
     def _add(candidates: list[tuple[str, str, str]]) -> None:
         for name, title, email in candidates:
-            key = _person_dedup_key(name)
+            key = person_dedup_key(name)
             if key not in seen and len(people) < _MAX_PEOPLE_PER_FIRM:
                 seen.add(key)
                 people.append((name, title, email))
