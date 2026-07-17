@@ -91,6 +91,9 @@ _MIGRATIONS = [
     # (see sec/db.py's migration comment + core/linkedin_override.py).
     "ALTER TABLE nfa_firms ADD COLUMN linkedin_firm_override TEXT",
     "ALTER TABLE nfa_principals ADD COLUMN linkedin_person_override TEXT",
+    # Same confirmed-profile-URL mechanism as sec/db.py -- see that file's
+    # migration comment.
+    "ALTER TABLE nfa_principals ADD COLUMN linkedin_url_confirmed INTEGER DEFAULT 0",
 ]
 
 

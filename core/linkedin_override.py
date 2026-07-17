@@ -17,8 +17,32 @@ this project already killed websearch.py for. This module only ever
 parses a correction a human has already verified.
 """
 from __future__ import annotations
+import re
 
 from core import llm
+
+# A pasted LinkedIn profile URL (not a company page) is the confirmed ground
+# truth itself -- no LLM call needed at all, unlike a plain-text name/firm
+# correction. Checked before parse_correction() is ever invoked.
+_PROFILE_URL_RE = re.compile(
+    r"(?:https?://)?(?:[a-z]{2,3}\.)?linkedin\.com/in/[\w\-%.]+/?",
+    re.IGNORECASE,
+)
+
+
+def extract_profile_url(text: str) -> str | None:
+    """If the user pasted a real LinkedIn profile URL, return it normalized
+    with an https:// scheme. None if no profile URL is present (a company
+    page, e.g. linkedin.com/company/..., doesn't count -- this is for a
+    specific person's confirmed profile)."""
+    match = _PROFILE_URL_RE.search(text)
+    if not match:
+        return None
+    url = match.group(0)
+    if not url.lower().startswith("http"):
+        url = "https://" + url
+    return url
+
 
 _SYSTEM = (
     "You extract a structured correction from a user's short note about how "

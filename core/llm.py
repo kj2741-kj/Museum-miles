@@ -5,6 +5,8 @@ network error). Same pattern as career-monitor's llm_assistant.py.
 """
 from __future__ import annotations
 import json
+import sys
+import traceback
 
 import requests
 
@@ -35,6 +37,13 @@ def _call_groq(messages: list[dict], json_mode: bool) -> str | None:
         )
         return resp.choices[0].message.content
     except Exception:
+        # Real diagnostic need (2026-07-17): this used to swallow the
+        # exception silently, so a real failure (bad key, rate limit,
+        # network block) looked identical to "no key configured" -- printed
+        # to stderr (captured in logs/sec/streamlit_stderr.log when run via
+        # Start-Process) so the actual cause is visible on the next failure.
+        print("[llm] Groq call failed:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return None
 
 
@@ -47,6 +56,8 @@ def _call_ollama(messages: list[dict], json_mode: bool) -> str | None:
         resp.raise_for_status()
         return resp.json()["message"]["content"]
     except Exception:
+        print("[llm] Ollama call failed (expected if Ollama isn't running locally):", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return None
 
 

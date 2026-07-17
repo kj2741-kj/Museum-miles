@@ -317,7 +317,19 @@ with tab_sec:
                 if st.button("💾 Save correction", key="sec_linkedin_correction_save"):
                     if not correction_text.strip():
                         st.warning("Type a description first.")
+                        pasted_url = None
                     else:
+                        pasted_url = linkedin_override.extract_profile_url(correction_text.strip())
+                    if pasted_url:
+                        # A real profile URL is the confirmed answer itself --
+                        # no LLM call needed, and it must never be regenerated
+                        # by a future re-enrichment pass.
+                        db.update_prospect(
+                            selected_id, linkedin_profile_url=pasted_url, linkedin_url_confirmed=1,
+                        )
+                        st.success(f"Saved confirmed profile link: {pasted_url}")
+                        st.rerun()
+                    elif correction_text.strip():
                         with st.spinner("Parsing correction..."):
                             parsed = linkedin_override.parse_correction(
                                 selected_firm, selected_row.get("contact_name"), correction_text.strip(),

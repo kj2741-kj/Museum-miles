@@ -325,11 +325,14 @@ def _build_secondary_contacts(
     a shared format tells us the likely FORM, not that this specific
     person's mailbox exists.
 
-    existing_overrides (2026-07-17): {person_dedup_key: linkedin_person_override}
-    from db.get_contact_overrides() for this same prospect — a user-confirmed
-    LinkedIn correction on a secondary contact, carried forward and applied to
-    the freshly-built URL rather than being silently lost when this prospect's
-    whole secondary-contact list gets rebuilt from scratch."""
+    existing_overrides (2026-07-17): {person_dedup_key: {"person_override":
+    str|None, "confirmed_url": str|None}} from db.get_contact_overrides()
+    for this same prospect — a user-confirmed LinkedIn correction on a
+    secondary contact, carried forward and applied to the freshly-built
+    record rather than being silently lost when this prospect's whole
+    secondary-contact list gets rebuilt from scratch. A confirmed_url (a
+    pasted real profile link) takes priority over a name-based override —
+    it's the actual verified profile, not a search query."""
     existing_overrides = existing_overrides or {}
     out = []
     for extra_name, extra_title in people:
@@ -348,15 +351,19 @@ def _build_secondary_contacts(
             if is_ok:
                 notes = _catch_all_note(reason)
 
-        override = existing_overrides.get(iapd.person_dedup_key(extra_name))
+        saved = existing_overrides.get(iapd.person_dedup_key(extra_name)) or {}
+        override = saved.get("person_override")
+        confirmed_url = saved.get("confirmed_url")
         contact = {
             "contact_name": extra_name, "contact_title": extra_title,
             "email": candidate, "email_verified": verified,
             "email_source": f"{source_label}_pattern_guess" if candidate else None,
-            "linkedin_profile_url": linkedin_url.build_person_url(override or extra_name, firm_name, hq_state),
+            "linkedin_profile_url": confirmed_url or linkedin_url.build_person_url(override or extra_name, firm_name, hq_state),
         }
         if override:
             contact["linkedin_person_override"] = override
+        if confirmed_url:
+            contact["linkedin_url_confirmed"] = 1
         if notes:
             contact["notes"] = notes
         out.append(contact)
@@ -407,6 +414,15 @@ def _enrich_prospect_inner(prospect: dict) -> dict:
     # call below so a user-confirmed correction on a secondary contact survives
     # this prospect's whole secondary-contact list being rebuilt from scratch.
     existing_overrides = db.get_contact_overrides(prospect["id"])
+
+    def _primary_linkedin_url(name: str) -> str:
+        # A pasted, confirmed profile URL (core.linkedin_override.extract_profile_url)
+        # is the actual verified profile, not a search query -- never
+        # regenerate it, unlike the name-override case below.
+        if prospect.get("linkedin_url_confirmed"):
+            return prospect.get("linkedin_profile_url")
+        return linkedin_url.build_person_url(prospect.get("linkedin_person_override") or name, linkedin_firm_name, hq_state)
+
     base_fields = {"linkedin_search_url": linkedin_url.build_search_url(linkedin_firm_name, hq_state)}
 
     original_website = prospect.get("website")
@@ -444,7 +460,7 @@ def _enrich_prospect_inner(prospect: dict) -> dict:
         name, title, direct_person_email = brochure_people[0]
         person_fields = {
             "contact_name": name, "contact_title": title,
-            "linkedin_profile_url": linkedin_url.build_person_url(prospect.get("linkedin_person_override") or name, linkedin_firm_name, hq_state),
+            "linkedin_profile_url": _primary_linkedin_url(name),
         }
         personal_candidates = guess_personal_emails(name, domain)
 
@@ -509,7 +525,7 @@ def _enrich_prospect_inner(prospect: dict) -> dict:
             if inferred_name:
                 name_fields = {
                     "contact_name": inferred_name,
-                    "linkedin_profile_url": linkedin_url.build_person_url(prospect.get("linkedin_person_override") or inferred_name, linkedin_firm_name, hq_state),
+                    "linkedin_profile_url": _primary_linkedin_url(inferred_name),
                 }
         result = {
             **base_fields, **website_fields, **name_fields, "email": direct_email,
@@ -576,7 +592,7 @@ def _enrich_prospect_inner(prospect: dict) -> dict:
             name, title = team_people[0]
             person_fields = {
                 "contact_name": name, "contact_title": title,
-                "linkedin_profile_url": linkedin_url.build_person_url(prospect.get("linkedin_person_override") or name, linkedin_firm_name, hq_state),
+                "linkedin_profile_url": _primary_linkedin_url(name),
             }
             personal_candidates = guess_personal_emails(name, domain)
 
@@ -624,7 +640,7 @@ def _enrich_prospect_inner(prospect: dict) -> dict:
         if verified:
             inferred_name = infer_name_from_email(email, firm_name)
             name_fields = (
-                {"contact_name": inferred_name, "linkedin_profile_url": linkedin_url.build_person_url(prospect.get("linkedin_person_override") or inferred_name, linkedin_firm_name, hq_state)}
+                {"contact_name": inferred_name, "linkedin_profile_url": _primary_linkedin_url(inferred_name)}
                 if inferred_name else {}
             )
             return {
@@ -635,7 +651,7 @@ def _enrich_prospect_inner(prospect: dict) -> dict:
     best = candidates[0]
     inferred_name = infer_name_from_email(best, firm_name)
     name_fields = (
-        {"contact_name": inferred_name, "linkedin_profile_url": linkedin_url.build_person_url(prospect.get("linkedin_person_override") or inferred_name, linkedin_firm_name, hq_state)}
+        {"contact_name": inferred_name, "linkedin_profile_url": _primary_linkedin_url(inferred_name)}
         if inferred_name else {}
     )
     return {

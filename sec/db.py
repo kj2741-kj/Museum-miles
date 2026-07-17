@@ -100,6 +100,13 @@ _MIGRATIONS = [
     "ALTER TABLE prospects ADD COLUMN linkedin_firm_override TEXT",
     "ALTER TABLE prospects ADD COLUMN linkedin_person_override TEXT",
     "ALTER TABLE prospect_contacts ADD COLUMN linkedin_person_override TEXT",
+    # A pasted real LinkedIn profile URL (core.linkedin_override.extract_profile_url)
+    # is stronger than a name-based override -- it's the confirmed profile
+    # itself, not a search query. When set, linkedin_profile_url holds that
+    # exact URL and must never be overwritten by a freshly generated search
+    # link during re-enrichment.
+    "ALTER TABLE prospects ADD COLUMN linkedin_url_confirmed INTEGER DEFAULT 0",
+    "ALTER TABLE prospect_contacts ADD COLUMN linkedin_url_confirmed INTEGER DEFAULT 0",
 ]
 
 
@@ -290,48 +297,62 @@ def record_dedup_verdict(a_id: int, b_id: int, same: bool, reason: str) -> None:
         )
 
 
-def get_contact_overrides(prospect_id: int) -> dict[str, str]:
-    """{person_dedup_key: linkedin_person_override} for this prospect's
-    existing secondary contacts that have a saved correction — used by
-    replace_contacts() to carry an override forward across a full
-    re-enrichment pass, keyed the same way iapd.py already dedupes people
-    across differently-formatted name strings."""
+def get_contact_overrides(prospect_id: int) -> dict[str, dict]:
+    """{person_dedup_key: {"person_override": str|None, "confirmed_url": str|None}}
+    for this prospect's existing secondary contacts that have a saved
+    correction — used by replace_contacts() to carry it forward across a
+    full re-enrichment pass, keyed the same way iapd.py already dedupes
+    people across differently-formatted name strings. A pasted, confirmed
+    profile URL takes priority over a name-based override wherever both
+    somehow exist, since it's the actual verified profile rather than a
+    search query built from a corrected name."""
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT contact_name, linkedin_person_override FROM prospect_contacts "
-            "WHERE prospect_id = ? AND linkedin_person_override IS NOT NULL",
+            "SELECT contact_name, linkedin_person_override, linkedin_profile_url, linkedin_url_confirmed "
+            "FROM prospect_contacts WHERE prospect_id = ? "
+            "AND (linkedin_person_override IS NOT NULL OR linkedin_url_confirmed = 1)",
             (prospect_id,),
         ).fetchall()
-    return {iapd.person_dedup_key(r["contact_name"]): r["linkedin_person_override"] for r in rows}
+    return {
+        iapd.person_dedup_key(r["contact_name"]): {
+            "person_override": r["linkedin_person_override"],
+            "confirmed_url": r["linkedin_profile_url"] if r["linkedin_url_confirmed"] else None,
+        }
+        for r in rows
+    }
 
 
 def replace_contacts(prospect_id: int, contacts: list[dict]) -> None:
     """Replace all secondary contacts for a prospect (clear + reinsert) —
     keeps re-enrichment idempotent, same pattern as update_prospect().
 
-    Carries forward each existing contact's linkedin_person_override
-    (2026-07-17): a plain clear+reinsert would otherwise silently discard a
-    user-confirmed LinkedIn correction the moment this prospect gets
-    re-enriched, since the override lived on the row being deleted. Matched
-    by person_dedup_key so it survives even if the freshly-discovered name
-    string isn't byte-identical to the corrected one (e.g. "Bradley Benz"
-    rediscovered again after "Brad Benz" was saved as the override)."""
+    Carries forward each existing contact's linkedin_person_override and/or
+    confirmed profile URL (2026-07-17): a plain clear+reinsert would
+    otherwise silently discard a user-confirmed LinkedIn correction the
+    moment this prospect gets re-enriched, since it lived on the row being
+    deleted. Matched by person_dedup_key so it survives even if the
+    freshly-discovered name string isn't byte-identical to the corrected
+    one (e.g. "Bradley Benz" rediscovered again after "Brad Benz" was
+    saved as the override)."""
     now = datetime.now(timezone.utc).isoformat()
     existing_overrides = get_contact_overrides(prospect_id)
     with get_conn() as conn:
         conn.execute("DELETE FROM prospect_contacts WHERE prospect_id = ?", (prospect_id,))
         for i, c in enumerate(contacts, start=1):
             name = c.get("contact_name")
-            override = existing_overrides.get(iapd.person_dedup_key(name)) if name else None
+            saved = existing_overrides.get(iapd.person_dedup_key(name)) if name else None
+            override = saved.get("person_override") if saved else None
+            confirmed_url = saved.get("confirmed_url") if saved else None
+            linkedin_profile_url = confirmed_url or c.get("linkedin_profile_url")
             conn.execute(
                 "INSERT INTO prospect_contacts "
                 "(prospect_id, rank, contact_name, contact_title, email, email_verified, "
-                "email_source, linkedin_profile_url, linkedin_person_override, notes, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "email_source, linkedin_profile_url, linkedin_person_override, linkedin_url_confirmed, notes, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     prospect_id, i, name, c.get("contact_title"), c.get("email"),
                     int(c.get("email_verified", 0)), c.get("email_source"),
-                    c.get("linkedin_profile_url"), override, c.get("notes"), now,
+                    linkedin_profile_url, override, int(bool(confirmed_url)), c.get("notes"), now,
                 ),
             )
 
