@@ -37,6 +37,24 @@ _LEGAL_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Same suffix set iapd.py's _person_dedup_key already uses.
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def _first_last_name(name: str) -> str:
+    """First + last word only. LinkedIn's exact-phrase match on the full
+    stored name fails whenever it includes a middle name/initial (e.g.
+    "Alan N. Hoffman", "Hugo R Sanchez II") but the person's real profile
+    just says "Alan Hoffman" / "Hugo Sanchez" — same reduction iapd.py's
+    _person_dedup_key already applies for name matching, just not
+    previously applied here for the search query itself."""
+    words = [w.strip(".,") for w in name.split()]
+    words = [w for w in words if w.lower() not in _NAME_SUFFIXES]
+    if len(words) < 2:
+        return name.strip()
+    return f"{words[0]} {words[-1]}"
+
+
 # Verified LinkedIn geoUrn IDs — reused from career-monitor's networking_utils.py
 # (that project's own proven set). Only states we have a confirmed ID for;
 # guessing unverified IDs for the rest risks another silent-failure round.
@@ -93,7 +111,7 @@ def build_person_url(person_name: str, firm_name: str, hq_state: str | None = No
     without that false-negative: "Greenlight" alone still matches a profile
     that says "Greenlight Capital"."""
     firm_token = _clean_firm_name(firm_name).split()[0] if _clean_firm_name(firm_name) else ""
-    keywords = f'"{person_name}"'
+    keywords = f'"{_first_last_name(person_name)}"'
     if firm_token:
         keywords += f" {firm_token}"
     params = {"keywords": keywords, "origin": "GLOBAL_SEARCH_HEADER"}

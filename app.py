@@ -257,27 +257,46 @@ with tab_sec:
         )
         st.caption(f"Showing {len(df)} of {total} prospects")
 
-        # --- Additional (secondary) contacts for the firms currently shown ---
-        # A firm can have more than one real contact (e.g. several co-founders
-        # found on a team page) — the main table above only shows the single
-        # "primary" contact per firm; the rest live here instead of being
-        # discarded.
-        all_contacts = pd.DataFrame([dict(r) for r in db.get_all_contacts()])
-        if not all_contacts.empty:
-            extra = all_contacts[all_contacts["prospect_id"].isin(df["id"])]
-            if not extra.empty:
-                with st.expander(f"👥 {len(extra)} additional contact(s) for the firms shown above"):
-                    st.dataframe(
-                        extra[["firm_name", "contact_name", "contact_title", "email", "email_verified", "linkedin_profile_url"]].rename(columns={
-                            "firm_name": "Firm", "contact_name": "Contact", "contact_title": "Title",
-                            "email": "Email", "email_verified": "Verified", "linkedin_profile_url": "Find This Person",
-                        }),
-                        use_container_width=True, hide_index=True,
-                        column_config={
-                            "Verified": st.column_config.CheckboxColumn(),
-                            "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
-                        },
-                    )
+        # --- Contacts by firm: pick a firm from the filtered list above,
+        # see all its contacts (primary + secondary) together ---
+        st.divider()
+        st.subheader("👥 Contacts by firm")
+        if df.empty:
+            st.caption("No firms match the current filters.")
+        else:
+            firm_names = sorted(df["firm_name"].unique().tolist())
+            selected_firm = st.selectbox("Select a firm", options=firm_names, key="contacts_firm_select")
+            selected_row = df.loc[df["firm_name"] == selected_firm].iloc[0]
+            selected_id = int(selected_row["id"])
+
+            contact_rows = []
+            if pd.notna(selected_row.get("contact_name")):
+                contact_rows.append({
+                    "Role": "Primary", "Contact": selected_row["contact_name"],
+                    "Title": selected_row.get("contact_title") or "",
+                    "Email": selected_row.get("email") or "",
+                    "Verified": bool(selected_row.get("email_verified")),
+                    "Find This Person": selected_row.get("linkedin_profile_url") or "",
+                })
+            for c in db.get_contacts_for_prospect(selected_id):
+                contact_rows.append({
+                    "Role": "Secondary", "Contact": c["contact_name"],
+                    "Title": c["contact_title"] or "", "Email": c["email"] or "",
+                    "Verified": bool(c["email_verified"]),
+                    "Find This Person": c["linkedin_profile_url"] or "",
+                })
+
+            if not contact_rows:
+                st.caption(f"No contacts found yet for {selected_firm}.")
+            else:
+                st.dataframe(
+                    pd.DataFrame(contact_rows),
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "Verified": st.column_config.CheckboxColumn(),
+                        "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
+                    },
+                )
 
         # --- Enrichment, scoped to whatever is currently filtered above ---
         # Only ever-untried prospects — previously-tried-and-failed ones (status
