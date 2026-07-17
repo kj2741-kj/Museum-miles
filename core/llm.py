@@ -27,6 +27,11 @@ def _groq_key() -> str | None:
 def _call_groq(messages: list[dict], json_mode: bool) -> str | None:
     key = _groq_key()
     if not key:
+        # This early-return path never hits the except block below, so it
+        # needs its own explicit log line -- otherwise a missing/unreadable
+        # key file from this process's perspective looks identical to a real
+        # API failure, with zero diagnostic trace either way.
+        print(f"[llm] Groq key not found (checked {config.GROQ_KEY_FILE})", file=sys.stderr, flush=True)
         return None
     try:
         from groq import Groq
@@ -42,8 +47,13 @@ def _call_groq(messages: list[dict], json_mode: bool) -> str | None:
         # network block) looked identical to "no key configured" -- printed
         # to stderr (captured in logs/sec/streamlit_stderr.log when run via
         # Start-Process) so the actual cause is visible on the next failure.
-        print("[llm] Groq call failed:", file=sys.stderr)
+        # flush=True / explicit .flush() since stderr is block-buffered, not
+        # line-buffered, once redirected to a file instead of a terminal --
+        # the first attempt at this logging produced an empty log file
+        # because of exactly this.
+        print("[llm] Groq call failed:", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
         return None
 
 
@@ -56,8 +66,9 @@ def _call_ollama(messages: list[dict], json_mode: bool) -> str | None:
         resp.raise_for_status()
         return resp.json()["message"]["content"]
     except Exception:
-        print("[llm] Ollama call failed (expected if Ollama isn't running locally):", file=sys.stderr)
+        print("[llm] Ollama call failed (expected if Ollama isn't running locally):", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
         return None
 
 
