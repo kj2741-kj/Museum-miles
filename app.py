@@ -592,25 +592,36 @@ with tab_nfa:
             st.success(f"Moved {len(nfa_df)} firms to \"{new_stage}\".")
             st.rerun()
 
-        # --- Principals for the firms currently shown ---
-        nfa_principals_df = pd.DataFrame([dict(r) for r in nfa_all_principals_rows])
-        if not nfa_principals_df.empty:
-            shown = nfa_principals_df[nfa_principals_df["firm_id"].isin(nfa_df["id"])]
-            if not shown.empty:
-                with st.expander(f"👥 {len(shown)} principal(s) for the firms shown above"):
-                    st.dataframe(
-                        shown[["firm_name", "name", "title", "ten_percent_owner", "email", "email_verified", "linkedin_profile_url"]].rename(columns={
-                            "firm_name": "Firm", "name": "Name", "title": "Title",
-                            "ten_percent_owner": "10%+ Owner", "email": "Email",
-                            "email_verified": "Verified", "linkedin_profile_url": "Find This Person",
-                        }),
-                        use_container_width=True, hide_index=True,
-                        column_config={
-                            "Verified": st.column_config.CheckboxColumn(),
-                            "10%+ Owner": st.column_config.CheckboxColumn(),
-                            "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
-                        },
-                    )
+        # --- Principals by firm: pick a firm from the filtered list above,
+        # see all its principals (with email/verification) together ---
+        st.divider()
+        st.subheader("👥 Principals by firm")
+        if nfa_df.empty:
+            st.caption("No firms match the current filters.")
+        else:
+            nfa_firm_names = sorted(nfa_df["firm_name"].unique().tolist())
+            selected_nfa_firm = st.selectbox("Select a firm", options=nfa_firm_names, key="nfa_contacts_firm_select")
+            selected_nfa_id = int(nfa_df.loc[nfa_df["firm_name"] == selected_nfa_firm, "id"].iloc[0])
+
+            firm_principals = nfa_db.get_principals_for_firm(selected_nfa_id)
+            if not firm_principals:
+                st.caption(f"No principals found yet for {selected_nfa_firm}.")
+            else:
+                st.dataframe(
+                    pd.DataFrame([dict(r) for r in firm_principals])[
+                        ["name", "title", "ten_percent_owner", "email", "email_verified", "linkedin_profile_url"]
+                    ].rename(columns={
+                        "name": "Name", "title": "Title", "ten_percent_owner": "10%+ Owner",
+                        "email": "Email", "email_verified": "Verified",
+                        "linkedin_profile_url": "Find This Person",
+                    }),
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "Verified": st.column_config.CheckboxColumn(),
+                        "10%+ Owner": st.column_config.CheckboxColumn(),
+                        "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
+                    },
+                )
 
         # --- Excel export, same filtered scope as above ---
         st.divider()
