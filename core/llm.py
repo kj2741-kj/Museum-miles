@@ -18,6 +18,22 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 
 
 def _groq_key() -> str | None:
+    """Streamlit Cloud secret first, then the local .groq_key file.
+
+    Real gap found live 2026-07-17: .groq_key is (correctly) gitignored as a
+    secret, so it never reaches the Streamlit Cloud deployment at all --
+    every LLM call there failed Groq (no key) then Ollama (no local server
+    reachable from a cloud container), i.e. exactly "both failed", with
+    nothing in this machine's own logs since the failing requests never
+    happened here. Streamlit Cloud's own Secrets manager (Settings ->
+    Secrets in the app dashboard, GROQ_API_KEY = "...") is the actual fix --
+    never committed to git, injected at runtime instead."""
+    try:
+        import streamlit as st
+        if "GROQ_API_KEY" in st.secrets:
+            return st.secrets["GROQ_API_KEY"] or None
+    except Exception:
+        pass  # not running under Streamlit, or no secrets.toml configured -- fall through to the local file
     if config.GROQ_KEY_FILE.exists():
         key = config.GROQ_KEY_FILE.read_text(encoding="utf-8").strip()
         return key or None

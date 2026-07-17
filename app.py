@@ -20,11 +20,11 @@ from core import linkedin_override
 
 ENRICH_BATCH_CAP = 200  # keep a single click bounded; re-click to continue
 
-st.set_page_config(page_title="Museum Mile — Prospecting", page_icon="🖼️", layout="wide")
+st.set_page_config(page_title="Museum Mile Prospecting", page_icon="🖼️", layout="wide")
 db.init_db()
 nfa_db.init_db()
 
-st.title("🖼️ Museum Mile Funds — Prospecting Dashboard")
+st.title("🖼️ Museum Mile Funds Prospecting Dashboard")
 
 # --- Sidebar: LLM features toggle ---
 with st.sidebar:
@@ -54,7 +54,7 @@ with st.sidebar:
         if cache.get("raw_csv_path"):
             st.caption(f"Raw archive: {cache['raw_csv_path']}")
     else:
-        st.caption("No cache yet — click Refresh below.")
+        st.caption("No cache yet. Click Refresh below.")
     st.markdown(f"[SEC ADV data listing page]({ingest_sec_adv.LISTING_URL})")
 
     if st.button("🔄 Refresh SEC ADV cache", help="Downloads the latest SEC bulk ADV filing (~1-2 min)"):
@@ -72,7 +72,7 @@ with st.sidebar:
                     if deregistered:
                         st.warning(
                             f"{len(deregistered)} firm(s) no longer appear in the SEC ADV bulk "
-                            f"file (likely deregistered) — flagged, not deleted: "
+                            f"file, likely deregistered. Flagged, not deleted: "
                             + ", ".join(p["firm_name"] for p in deregistered[:5])
                             + (f" +{len(deregistered) - 5} more" if len(deregistered) > 5 else "")
                         )
@@ -104,8 +104,8 @@ with st.sidebar:
                     st.error(f"Failed: {e}")
 
     st.divider()
-    st.caption("No filters applied at ingest — every firm in the SEC ADV bulk "
-               "file is imported. Narrow down with the AUM/location filters "
+    st.caption("No filters applied at ingest. Every firm in the SEC ADV bulk "
+               "file is imported; narrow down with the AUM/location filters "
                "below once data is in.")
 
     st.divider()
@@ -156,7 +156,7 @@ with tab_sec:
         new_in_sec = _count_new_sec_entries(cache["fetched_at"])
         cols[4].metric("New in SEC data", new_in_sec if new_in_sec else "None")
     else:
-        cols[4].metric("New in SEC data", "—")
+        cols[4].metric("New in SEC data", "N/A")
     cols[5].metric("Deregistered", n_deregistered)
 
     st.divider()
@@ -192,7 +192,7 @@ with tab_sec:
 
         firm_search = st.text_input(
             "🔎 Search firm name",
-            placeholder="Doesn't need to be exact or complete — e.g. \"greenlight\" finds \"Greenlight Masters, LLC\"",
+            placeholder="Doesn't need to be exact. For example, \"greenlight\" finds \"Greenlight Masters, LLC\"",
             key="sec_firm_search",
         )
 
@@ -238,7 +238,7 @@ with tab_sec:
         ]
         if show_deregistered:
             display_cols.append("deregistered_at")
-        st.dataframe(
+        table_event = st.dataframe(
             df[display_cols].rename(columns={
                 "firm_name": "Firm", "prospect_type": "Type", "hq_city": "City",
                 "also_nfa": "Also NFA-Registered",
@@ -248,7 +248,7 @@ with tab_sec:
                 "linkedin_search_url": "LinkedIn Search",
                 "status": "Status", "deregistered_at": "Deregistered",
             }),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Verified": st.column_config.CheckboxColumn(),
@@ -257,8 +257,20 @@ with tab_sec:
                 "LinkedIn Search": st.column_config.LinkColumn(display_text="🔍 Search"),
                 "Also NFA-Registered": st.column_config.CheckboxColumn(),
             },
+            on_select="rerun",
+            selection_mode="single-row",
+            key="sec_main_table",
         )
-        st.caption(f"Showing {len(df)} of {total} prospects")
+        st.caption(f"Showing {len(df)} of {total} prospects. Click a row to jump to it below.")
+
+        # Clicking a row above jumps the "Contacts by firm" dropdown straight
+        # to that firm (2026-07-17, requested in place of double-click, which
+        # st.dataframe has no event for). Setting session_state for the
+        # selectbox's own key BEFORE it's instantiated below is what makes it
+        # jump rather than just changing the default on first render.
+        clicked_rows = table_event["selection"]["rows"] if table_event else []
+        if clicked_rows:
+            st.session_state["contacts_firm_select"] = df.iloc[clicked_rows[0]]["firm_name"]
 
         # --- Contacts by firm: pick a firm from the filtered list above,
         # see all its contacts (primary + secondary) together ---
@@ -268,6 +280,8 @@ with tab_sec:
             st.caption("No firms match the current filters.")
         else:
             firm_names = sorted(df["firm_name"].unique().tolist())
+            if st.session_state.get("contacts_firm_select") not in firm_names:
+                st.session_state.pop("contacts_firm_select", None)  # stale pick from before a filter changed
             selected_firm = st.selectbox("Select a firm", options=firm_names, key="contacts_firm_select")
             selected_row = df.loc[df["firm_name"] == selected_firm].iloc[0]
             selected_id = int(selected_row["id"])
@@ -294,7 +308,7 @@ with tab_sec:
             else:
                 st.dataframe(
                     pd.DataFrame(contact_rows),
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                     column_config={
                         "Verified": st.column_config.CheckboxColumn(),
                         "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
@@ -308,10 +322,11 @@ with tab_sec:
             # core/linkedin_override.py for why this is safe where guessing
             # a brand name from scratch wouldn't be.
             if llm_enabled:
-                st.markdown("**Spotted a LinkedIn mismatch for this firm?**")
+                st.markdown("**Correct a LinkedIn mismatch for this firm**")
                 correction_text = st.text_area(
-                    "Describe it — e.g. \"the firm is called The Suby Group on "
-                    "LinkedIn\" or \"he goes by Brad Benz\"",
+                    "Describe the correction, or paste a LinkedIn profile URL. "
+                    "For example: \"the firm is called The Suby Group on LinkedIn\" "
+                    "or \"he goes by Brad Benz\"",
                     key="sec_linkedin_correction_text",
                 )
                 if st.button("💾 Save correction", key="sec_linkedin_correction_save"):
@@ -335,9 +350,9 @@ with tab_sec:
                                 selected_firm, selected_row.get("contact_name"), correction_text.strip(),
                             )
                         if parsed["model"] == "none":
-                            st.error("LLM unavailable (Groq/Ollama both failed) — try again later.")
+                            st.error("LLM unavailable: Groq and Ollama both failed. Try again later.")
                         elif not parsed["firm_override"] and not parsed["person_override"]:
-                            st.warning("Couldn't extract a correction from that text — try rephrasing.")
+                            st.warning("Couldn't extract a correction from that text. Try rephrasing.")
                         else:
                             hq_state = selected_row.get("hq_state")
                             effective_firm = parsed["firm_override"] or selected_firm
@@ -351,10 +366,9 @@ with tab_sec:
                                 update_fields["linkedin_profile_url"] = linkedin_url.build_person_url(effective_person, effective_firm, hq_state)
                             db.update_prospect(selected_id, **update_fields)
                             st.success(
-                                f"Saved (parsed via {parsed['model']}) — "
-                                f"firm: {parsed['firm_override'] or '(unchanged)'}, "
-                                f"person: {parsed['person_override'] or '(unchanged)'}. "
-                                "This will keep applying even after future re-enrichment."
+                                f"Saved. Firm: {parsed['firm_override'] or 'unchanged'}. "
+                                f"Person: {parsed['person_override'] or 'unchanged'}. "
+                                "This correction will keep applying after future re-enrichment."
                             )
                             st.rerun()
             else:
@@ -374,7 +388,7 @@ with tab_sec:
         else:
             batch = min(n_needs, ENRICH_BATCH_CAP)
             est_seconds = batch * 8  # ~8s/item effective throughput observed at the default 8 workers
-            note = "" if batch == n_needs else f" (capped at {ENRICH_BATCH_CAP} per click — re-click to continue with the rest)"
+            note = "" if batch == n_needs else f" (capped at {ENRICH_BATCH_CAP} per click; re-click to continue with the rest)"
             st.caption(
                 f"{n_needs} of {len(df)} filtered prospects have no email yet. "
                 f"This click will process {batch}{note}, est. ~{est_seconds:.0f}s. "
@@ -414,10 +428,10 @@ with tab_sec:
         else:
             st.caption(
                 f"{n_failed} of {len(df)} filtered prospects were already enriched once "
-                "and no email was found — excluded from the button above so it never "
-                "silently redoes known failures. Click here to explicitly give them "
-                "another full attempt (their website or SEC filing may have changed "
-                "since the last try)."
+                "and no email was found, so they're excluded from the button above to "
+                "avoid silently redoing known failures. Click here to give them another "
+                "full attempt; their website or SEC filing may have changed since the "
+                "last try."
             )
             if st.button(f"♻️ Retry {min(n_failed, ENRICH_BATCH_CAP)} failed companies"):
                 progress = st.progress(0.0)
@@ -447,11 +461,11 @@ with tab_sec:
         else:
             st.caption(
                 f"{n_reverify} of {len(df)} filtered prospects have an email that "
-                "couldn't be confirmed yet (not necessarily wrong — many mail "
-                "servers don't answer the free check on the first try). This "
-                "only re-runs the MX+SMTP handshake against the SAME email "
-                "already on file — it does not search for a different address "
-                "or redo any discovery/scraping."
+                "couldn't be confirmed yet. This isn't necessarily wrong; many mail "
+                "servers don't answer the free check on the first try. This only "
+                "re-runs the MX and SMTP handshake against the same email already "
+                "on file. It does not search for a different address or redo any "
+                "discovery or scraping."
             )
             if st.button(f"🔁 Re-verify {n_reverify} emails"):
                 progress = st.progress(0.0)
@@ -477,17 +491,18 @@ with tab_sec:
         export_cols = st.columns(2)
         with export_cols[0]:
             filename_preview = excel_export.build_filename(state_filter, city_filter, narrowed_aum_range)
-            st.caption(f"**Current view** — the {len(df)} currently filtered prospects, "
-                       f"2 sheets (Prospects + Additional Contacts).")
+            st.caption(f"**Current view**: the {len(df)} currently filtered prospects, "
+                       f"2 sheets (Prospects and Additional Contacts).")
             if st.button("💾 Export current view"):
                 path = excel_export.export_prospects(df, state_filter, city_filter, narrowed_aum_range)
                 st.success(f"Saved to {path}")
         with export_cols[1]:
-            st.caption("**Full contact database** — every SEC prospect and contact, "
-                       "one row per person, with AUM/City/State on every row for easy "
-                       "filtering in Excel. Ignores the filters above; always the full list.")
+            st.caption("**Full contact database**: every SEC prospect and contact, "
+                       "one row per person, with AUM, City, and State on every row for "
+                       "easy filtering in Excel. Ignores the filters above; always exports "
+                       "the full list.")
             if st.button("💾 Export full contact database"):
-                with st.spinner("Building full export (this can take a minute — 60k+ rows)..."):
+                with st.spinner("Building full export (may take a minute for 60k+ rows)..."):
                     path = excel_export.export_full_database()
                 st.success(f"Saved to {path}")
 
@@ -499,14 +514,14 @@ with tab_sec:
             if not dupes:
                 st.caption(
                     "No duplicates found yet. Run `python run_dedup_scan.py` to scan the full "
-                    "database (candidate pairs are cheap to generate; each is LLM-adjudicated "
-                    "with HQ/CRD/AUM context before being reported, to avoid flagging genuinely "
-                    "different entities like a US firm vs. its overseas affiliate — and every "
-                    "verdict is remembered, so re-scanning after a fresh ingest only checks "
-                    "genuinely new candidate pairs)."
+                    "database. Candidate pairs are cheap to generate; each is LLM-adjudicated "
+                    "with HQ, CRD, and AUM context before being reported, to avoid flagging "
+                    "genuinely different entities such as a US firm and its overseas affiliate. "
+                    "Every verdict is remembered, so re-scanning after a fresh ingest only "
+                    "checks genuinely new candidate pairs."
                 )
             else:
-                st.caption(f"{len(dupes)} pairs the LLM confirmed as likely the same real firm — review before merging.")
+                st.caption(f"{len(dupes)} pairs the LLM confirmed as likely the same real firm. Review before merging.")
                 for i, pair in enumerate(dupes):
                     with st.container(border=True):
                         cols = st.columns([3, 3, 2, 1, 1])
@@ -545,18 +560,18 @@ with tab_nfa:
         cols[5].metric("Also SEC-registered", nfa_dual_registered)
 
         st.caption(
-            "NFA discloses named officers/owners directly (getPrincipals) — "
-            "no PDF brochure parsing needed, unlike the SEC side. Website/"
-            "email are discovered via cross-reference against SEC-registered "
-            "dual-filers, or verified domain guessing when no cross-ref exists "
-            "(see nfa_enrich.py). Corporate/trust entities disclosed as "
-            "10%+ owners are excluded from email guessing — only real "
-            "individuals get a personal-email attempt. \"Also SEC-registered\" "
-            "means the same real firm already exists as a prospect in the SEC "
-            "ADV tab (`python crosslink_nfa_sec.py` to refresh this after a "
-            "fresh ingest on either side) — worth checking there for a richer "
-            "profile (named contact via ADV brochure, AUM) before treating it "
-            "as a separate lead."
+            "NFA discloses named officers and owners directly (getPrincipals), "
+            "so no PDF brochure parsing is needed here, unlike the SEC side. "
+            "Website and email are discovered via cross-reference against "
+            "SEC-registered dual-filers, or verified domain guessing when no "
+            "cross-reference exists (see nfa_enrich.py). Corporate and trust "
+            "entities disclosed as 10%+ owners are excluded from email "
+            "guessing; only real individuals get a personal-email attempt. "
+            "\"Also SEC-registered\" means the same firm already exists as a "
+            "prospect in the SEC ADV tab (run `python crosslink_nfa_sec.py` "
+            "to refresh this after a fresh ingest on either side). Worth "
+            "checking there for a richer profile, such as a named contact "
+            "from the ADV brochure or AUM, before treating it as a separate lead."
         )
 
         st.divider()
@@ -620,7 +635,7 @@ with tab_nfa:
             "firm_name", "reg_types", "city", "state", "membership_status",
             "has_reg_actions", "website", "website_source", "also_sec", "crm_stage",
         ]
-        st.dataframe(
+        nfa_table_event = st.dataframe(
             nfa_df[nfa_display_cols].rename(columns={
                 "firm_name": "Firm", "reg_types": "Registration Types", "city": "City",
                 "state": "State", "membership_status": "Membership Status",
@@ -628,23 +643,30 @@ with tab_nfa:
                 "website_source": "Website Source", "also_sec": "Also SEC-Registered",
                 "crm_stage": "CRM Stage",
             }),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Website": st.column_config.LinkColumn(display_text=r"(?:https?://)?(?:www\.)?([^/]+)"),
                 "Also SEC-Registered": st.column_config.CheckboxColumn(),
             },
+            on_select="rerun",
+            selection_mode="single-row",
+            key="nfa_main_table",
         )
-        st.caption(f"Showing {len(nfa_df)} of {nfa_total} NFA firms")
+        st.caption(f"Showing {len(nfa_df)} of {nfa_total} NFA firms. Click a row to jump to it below.")
+
+        nfa_clicked_rows = nfa_table_event["selection"]["rows"] if nfa_table_event else []
+        if nfa_clicked_rows:
+            st.session_state["nfa_contacts_firm_select"] = nfa_df.iloc[nfa_clicked_rows[0]]["firm_name"]
 
         # --- Bulk CRM stage update, same filtered scope as above ---
         st.divider()
         st.subheader("🏷️ Update CRM stage for filtered firms")
         st.caption(
             f"Moves all {len(nfa_df)} currently filtered NFA firms to the chosen "
-            "stage — same pipeline stages as the SEC tab. Outreach itself "
-            "(cold email / LinkedIn) isn't built yet; this just tracks where "
-            "each firm stands once that starts."
+            "stage, using the same pipeline stages as the SEC tab. Outreach "
+            "itself (cold email or LinkedIn) isn't built yet; this just tracks "
+            "where each firm stands once that starts."
         )
         stage_cols = st.columns([3, 1])
         new_stage = stage_cols[0].selectbox("New stage", config.STATUS_STAGES, key="nfa_crm_stage_select")
@@ -662,6 +684,8 @@ with tab_nfa:
             st.caption("No firms match the current filters.")
         else:
             nfa_firm_names = sorted(nfa_df["firm_name"].unique().tolist())
+            if st.session_state.get("nfa_contacts_firm_select") not in nfa_firm_names:
+                st.session_state.pop("nfa_contacts_firm_select", None)  # stale pick from before a filter changed
             selected_nfa_firm = st.selectbox("Select a firm", options=nfa_firm_names, key="nfa_contacts_firm_select")
             selected_nfa_id = int(nfa_df.loc[nfa_df["firm_name"] == selected_nfa_firm, "id"].iloc[0])
 
@@ -677,7 +701,7 @@ with tab_nfa:
                         "email": "Email", "email_verified": "Verified",
                         "linkedin_profile_url": "Find This Person",
                     }),
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                     column_config={
                         "Verified": st.column_config.CheckboxColumn(),
                         "10%+ Owner": st.column_config.CheckboxColumn(),
@@ -691,34 +715,48 @@ with tab_nfa:
             # needs to say which one (if any) a person-name fix applies to.
             selected_nfa_row = nfa_df.loc[nfa_df["firm_name"] == selected_nfa_firm].iloc[0]
             if llm_enabled:
-                st.markdown("**Spotted a LinkedIn mismatch for this firm?**")
+                st.markdown("**Correct a LinkedIn mismatch for this firm**")
                 principal_dicts = [dict(r) for r in firm_principals]
                 principal_choice = None
                 if principal_dicts:
                     principal_choice = st.selectbox(
-                        "Which principal does a person-name correction apply to? "
-                        "(leave as firm-name-only if it's just the firm's public/DBA name)",
+                        "Which principal does this correction apply to? Leave as "
+                        "firm name only if it's just the firm's public or DBA name.",
                         options=["(firm name only)"] + [p["name"] for p in principal_dicts],
                         key="nfa_correction_principal_select",
                     )
                     if principal_choice == "(firm name only)":
                         principal_choice = None
                 nfa_correction_text = st.text_area(
-                    "Describe it — e.g. \"the firm is called X on LinkedIn\" or \"he goes by Y\"",
+                    "Describe the correction, or paste a LinkedIn profile URL. "
+                    "For example: \"the firm is called X on LinkedIn\" or \"he goes by Y\"",
                     key="nfa_linkedin_correction_text",
                 )
                 if st.button("💾 Save correction", key="nfa_linkedin_correction_save"):
                     if not nfa_correction_text.strip():
                         st.warning("Type a description first.")
+                        pasted_url = None
                     else:
+                        pasted_url = linkedin_override.extract_profile_url(nfa_correction_text.strip())
+                    if pasted_url and not principal_choice:
+                        st.warning("A pasted profile URL applies to one specific person. Pick which principal it belongs to above first.")
+                    elif pasted_url:
+                        # A real profile URL is the confirmed answer itself --
+                        # no LLM call needed, and it must never be regenerated
+                        # by a future re-enrichment pass.
+                        p = next(p for p in principal_dicts if p["name"] == principal_choice)
+                        nfa_db.update_principal(p["id"], linkedin_profile_url=pasted_url, linkedin_url_confirmed=1)
+                        st.success(f"Saved confirmed profile link for {principal_choice}: {pasted_url}")
+                        st.rerun()
+                    elif nfa_correction_text.strip():
                         with st.spinner("Parsing correction..."):
                             parsed = linkedin_override.parse_correction(
                                 selected_nfa_firm, principal_choice, nfa_correction_text.strip(),
                             )
                         if parsed["model"] == "none":
-                            st.error("LLM unavailable (Groq/Ollama both failed) — try again later.")
+                            st.error("LLM unavailable: Groq and Ollama both failed. Try again later.")
                         elif not parsed["firm_override"] and not parsed["person_override"]:
-                            st.warning("Couldn't extract a correction from that text — try rephrasing.")
+                            st.warning("Couldn't extract a correction from that text. Try rephrasing.")
                         else:
                             hq_state = selected_nfa_row.get("state")
                             effective_firm = parsed["firm_override"] or selected_nfa_firm
@@ -737,10 +775,9 @@ with tab_nfa:
                                     new_url = linkedin_url.build_person_url(person_name, effective_firm, hq_state)
                                     nfa_db.update_principal(p["id"], linkedin_profile_url=new_url)
                             st.success(
-                                f"Saved (parsed via {parsed['model']}) — "
-                                f"firm: {parsed['firm_override'] or '(unchanged)'}, "
-                                f"person: {parsed['person_override'] or '(unchanged)'}. "
-                                "This will keep applying even after future re-enrichment."
+                                f"Saved. Firm: {parsed['firm_override'] or 'unchanged'}. "
+                                f"Person: {parsed['person_override'] or 'unchanged'}. "
+                                "This correction will keep applying after future re-enrichment."
                             )
                             st.rerun()
             else:
@@ -752,15 +789,15 @@ with tab_nfa:
         nfa_export_cols = st.columns(2)
         with nfa_export_cols[0]:
             nfa_filename_preview = nfa_excel_export.build_filename(nfa_state_filter, reg_type_filter)
-            st.caption(f"**Current view** — the {len(nfa_df)} currently filtered NFA firms, "
-                       f"2 sheets (Firms + Principals).")
+            st.caption(f"**Current view**: the {len(nfa_df)} currently filtered NFA firms, "
+                       f"2 sheets (Firms and Principals).")
             if st.button("💾 Export current view", key="nfa_export_current"):
                 path = nfa_excel_export.export_firms(nfa_df, nfa_state_filter, reg_type_filter)
                 st.success(f"Saved to {path}")
         with nfa_export_cols[1]:
-            st.caption("**Full contact database** — every NFA firm and principal, one row "
-                       "per person, with City/State on every row for easy filtering. "
-                       "Ignores the filters above; always the full list.")
+            st.caption("**Full contact database**: every NFA firm and principal, one row "
+                       "per person, with City and State on every row for easy filtering. "
+                       "Ignores the filters above; always exports the full list.")
             if st.button("💾 Export full contact database", key="nfa_export_full"):
                 with st.spinner("Building full export..."):
                     path = nfa_excel_export.export_full_database()
