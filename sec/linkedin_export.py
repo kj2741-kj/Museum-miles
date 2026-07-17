@@ -45,7 +45,11 @@ _LINKEDIN_COLUMNS = ["email", "firstname", "lastname", "jobtitle", "employeecomp
 _NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
 
 
-def _split_name(name: str) -> tuple[str, str] | None:
+def split_name(name: str) -> tuple[str, str] | None:
+    """First + last word only, suffixes dropped. Public (not `_`-prefixed)
+    since excel_export.py also uses this to add First/Last Name columns to
+    the regular Excel exports (2026-07-17), not just this module's own
+    Matched Audiences CSV."""
     parts = [p.strip(".,") for p in name.split() if p.strip(".,")]
     parts = [p for p in parts if p.lower() not in _NAME_SUFFIXES]
     if len(parts) < 2:
@@ -72,7 +76,7 @@ def build_rows(df: pd.DataFrame) -> list[dict]:
     rows = []
 
     def _add(name: str | None, email: str | None, title: str | None, firm: str) -> None:
-        split = _split_name(name) if name else None
+        split = split_name(name) if name else None
         if not split and not email:
             return  # neither email nor a splittable name -- can't match on anything
         first, last = split if split else ("", "")
@@ -83,7 +87,10 @@ def build_rows(df: pd.DataFrame) -> list[dict]:
 
     for _, p in df.iterrows():
         if p.get("contact_name") or p.get("email"):
-            _add(p.get("contact_name"), p.get("email"), p.get("contact_title"), p["firm_name"])
+            # A user-confirmed LinkedIn name correction is more likely to
+            # match the real profile than the raw SEC-filed name.
+            name = p.get("linkedin_person_override") or p.get("contact_name")
+            _add(name, p.get("email"), p.get("contact_title"), p["firm_name"])
 
     all_contacts = pd.DataFrame([dict(r) for r in db.get_all_contacts()])
     if not all_contacts.empty:
@@ -91,7 +98,8 @@ def build_rows(df: pd.DataFrame) -> list[dict]:
         firm_names = df.set_index("id")["firm_name"]
         for _, c in extra.iterrows():
             if c.get("contact_name") or c.get("email"):
-                _add(c.get("contact_name"), c.get("email"), c.get("contact_title"), firm_names.get(c["prospect_id"], ""))
+                name = c.get("linkedin_person_override") or c.get("contact_name")
+                _add(name, c.get("email"), c.get("contact_title"), firm_names.get(c["prospect_id"], ""))
 
     return rows
 

@@ -48,15 +48,29 @@ def export_firms(df: pd.DataFrame, states: list[str], reg_types: list[str]) -> "
         "sec_prospect_id": "Also SEC-Registered",
     })
 
+    from sec.excel_export import _linkedin_name_split  # reused for the same First/Last split logic as the SEC side
+    from cftc.nfa_enrich import _looks_like_person  # a corporate/trust owner disclosed as a 10%+ "principal" isn't a person to split
+
     principal_cols = [
         "firm_name", "name", "title", "ten_percent_owner", "email",
-        "email_verified", "email_source", "linkedin_profile_url",
+        "email_verified", "email_source", "linkedin_profile_url", "linkedin_person_override",
     ]
     all_principals = pd.DataFrame([dict(r) for r in nfa_db.get_all_principals()])
     if not all_principals.empty:
         principals_out = all_principals[all_principals["firm_id"].isin(df["id"])][principal_cols].copy()
     else:
         principals_out = pd.DataFrame(columns=principal_cols)
+
+    def _split_if_person(r):
+        if not r.get("name") or not _looks_like_person(r["name"]):
+            return "", ""
+        return _linkedin_name_split(r.get("name"), r.get("linkedin_person_override"))
+
+    splits = principals_out.apply(_split_if_person, axis=1)
+    principals_out["LinkedIn First Name"] = [s[0] for s in splits] if len(principals_out) else []
+    principals_out["LinkedIn Last Name"] = [s[1] for s in splits] if len(principals_out) else []
+    principals_out = principals_out.drop(columns=[c for c in ["linkedin_person_override"] if c in principals_out.columns])
+
     principals_out = principals_out.rename(columns={
         "firm_name": "Firm", "name": "Name", "title": "Title",
         "ten_percent_owner": "10%+ Owner", "email": "Email",
@@ -88,6 +102,9 @@ def export_full_database() -> "Path":
     field (not a CFTC-disclosed concept the way SEC's Form ADV discloses it),
     so registration type + city/state stand in as the firm-level context.
     Ignores any dashboard filter -- always the full, current master list."""
+    from sec.excel_export import _linkedin_name_split
+    from cftc.nfa_enrich import _looks_like_person
+
     firms = [dict(r) for r in nfa_db.get_firms()]
     principals_by_firm: dict[int, list[dict]] = {}
     for p in nfa_db.get_all_principals():
@@ -103,18 +120,25 @@ def export_full_database() -> "Path":
         }
         people = principals_by_firm.get(f["id"], [])
         if not people:
-            rows.append({**base, "Name": None, "Title": None, "Email": None, "Verified": False, "10%+ Owner": False, "Find This Person": None})
+            rows.append({
+                **base, "Name": None, "Title": None, "Email": None, "Verified": False,
+                "10%+ Owner": False, "Find This Person": None,
+                "LinkedIn First Name": "", "LinkedIn Last Name": "",
+            })
         for p in people:
+            first, last = ("", "") if not _looks_like_person(p["name"]) else _linkedin_name_split(p["name"], p.get("linkedin_person_override"))
             rows.append({
                 **base, "Name": p["name"], "Title": p["title"], "Email": p["email"],
                 "Verified": bool(p["email_verified"]), "10%+ Owner": bool(p["ten_percent_owner"]),
                 "Find This Person": p["linkedin_profile_url"],
+                "LinkedIn First Name": first, "LinkedIn Last Name": last,
             })
 
     cols = [
         "Firm", "Registration Types", "Name", "Title", "Email", "Verified",
         "10%+ Owner", "City", "State", "Website", "Also SEC-Registered",
         "Reg Actions", "Status", "Find This Person",
+        "LinkedIn First Name", "LinkedIn Last Name",
     ]
     out = pd.DataFrame(rows, columns=cols)
 

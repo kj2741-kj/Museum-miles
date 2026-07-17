@@ -1,6 +1,7 @@
 """Museum Mile Funds — marketing/prospecting dashboard. SEC ADV + NFA CPO/CTA tabs."""
 import difflib
 import re
+from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
@@ -374,49 +375,26 @@ with tab_sec:
             else:
                 st.caption("Turn on \"Enable LLM-powered features\" in the sidebar to correct a LinkedIn mismatch.")
 
-        # --- Enrichment, scoped to whatever is currently filtered above ---
-        # Only ever-untried prospects — previously-tried-and-failed ones (status
-        # 'Enriched' with no email) are deliberately excluded here so a normal
-        # click never silently redoes known failures; use the Retry section below
-        # for those on purpose.
+        # --- Excel export, same filtered scope as above ---
         st.divider()
-        st.subheader("📧 Find emails for this filtered list")
-        needs_enrichment = df[df["email"].isna() & (df["status"] == "New")]
-        n_needs = len(needs_enrichment)
-        if n_needs == 0:
-            st.caption("Every prospect in this filtered view has already been enriched at least once.")
-        else:
-            batch = min(n_needs, ENRICH_BATCH_CAP)
-            est_seconds = batch * 8  # ~8s/item effective throughput observed at the default 8 workers
-            note = "" if batch == n_needs else f" (capped at {ENRICH_BATCH_CAP} per click; re-click to continue with the rest)"
-            st.caption(
-                f"{n_needs} of {len(df)} filtered prospects have no email yet. "
-                f"This click will process {batch}{note}, est. ~{est_seconds:.0f}s. "
-                "For each firm: looks up their SEC ADV brochure for a named senior "
-                "person (key-person disclosures, etc.) and guesses their email, or "
-                "uses an email directly disclosed on the brochure's cover page. If "
-                "the SEC-listed website is a LinkedIn/social page, recovers the "
-                "firm's real site from that same brochure. Otherwise scrapes the "
-                "firm's website, falling back to info@/contact@/ir@. Verifies via "
-                "free syntax + MX + SMTP-handshake checks (no paid tools) where possible."
-            )
-            if st.button(f"🔎 Enrich {batch} prospects"):
-                progress = st.progress(0.0)
-                status_text = st.empty()
-
-                def _on_progress(done: int, total_n: int) -> None:
-                    progress.progress(done / total_n)
-                    status_text.text(f"{done}/{total_n} processed")
-
-                target_ids = needs_enrichment["id"].tolist()[:batch]
-                result = enrich.enrich_prospects(target_ids, progress_callback=_on_progress)
-                progress.empty()
-                status_text.empty()
-                st.success(
-                    f"Found emails for {result['enriched']} ({result['verified']} SMTP-verified), "
-                    f"no email found for {result['no_email']}."
-                )
-                st.rerun()
+        st.subheader("💾 Export to Excel")
+        export_cols = st.columns(2)
+        with export_cols[0]:
+            filename_preview = excel_export.build_filename(state_filter, city_filter, narrowed_aum_range)
+            st.caption(f"**Current view**: the {len(df)} currently filtered prospects, "
+                       f"2 sheets (Prospects and Additional Contacts).")
+            if st.button("💾 Export current view"):
+                path = excel_export.export_prospects(df, state_filter, city_filter, narrowed_aum_range)
+                st.success(f"Saved to {path}")
+        with export_cols[1]:
+            st.caption("**Full contact database**: every SEC prospect and contact, "
+                       "one row per person, with AUM, City, and State on every row for "
+                       "easy filtering in Excel. Ignores the filters above; always exports "
+                       "the full list.")
+            if st.button("💾 Export full contact database"):
+                with st.spinner("Building full export (may take a minute for 60k+ rows)..."):
+                    path = excel_export.export_full_database()
+                st.success(f"Saved to {path}")
 
         # --- Retry previously-failed, scoped to whatever is currently filtered above ---
         st.divider()
@@ -485,43 +463,45 @@ with tab_sec:
                 )
                 st.rerun()
 
-        # --- Excel export, same filtered scope as above ---
-        st.divider()
-        st.subheader("💾 Export to Excel")
-        export_cols = st.columns(2)
-        with export_cols[0]:
-            filename_preview = excel_export.build_filename(state_filter, city_filter, narrowed_aum_range)
-            st.caption(f"**Current view**: the {len(df)} currently filtered prospects, "
-                       f"2 sheets (Prospects and Additional Contacts).")
-            if st.button("💾 Export current view"):
-                path = excel_export.export_prospects(df, state_filter, city_filter, narrowed_aum_range)
-                st.success(f"Saved to {path}")
-        with export_cols[1]:
-            st.caption("**Full contact database**: every SEC prospect and contact, "
-                       "one row per person, with AUM, City, and State on every row for "
-                       "easy filtering in Excel. Ignores the filters above; always exports "
-                       "the full list.")
-            if st.button("💾 Export full contact database"):
-                with st.spinner("Building full export (may take a minute for 60k+ rows)..."):
-                    path = excel_export.export_full_database()
-                st.success(f"Saved to {path}")
-
         # --- Duplicate review (Phase 2 LLM dedup) — hidden while the LLM toggle is off ---
         if llm_enabled:
             st.divider()
             st.subheader("🔁 Possible duplicates")
             dupes = db.get_confirmed_duplicates()
-            if not dupes:
-                st.caption(
-                    "No duplicates found yet. Run `python run_dedup_scan.py` to scan the full "
-                    "database. Candidate pairs are cheap to generate; each is LLM-adjudicated "
-                    "with HQ, CRD, and AUM context before being reported, to avoid flagging "
-                    "genuinely different entities such as a US firm and its overseas affiliate. "
-                    "Every verdict is remembered, so re-scanning after a fresh ingest only "
-                    "checks genuinely new candidate pairs."
-                )
-            else:
-                st.caption(f"{len(dupes)} pairs the LLM confirmed as likely the same real firm. Review before merging.")
+            last_scan = settings.get("dedup_last_scan_at")
+            last_scan_display = f"{last_scan[:19].replace('T', ' ')} UTC" if last_scan else "never"
+            pending_candidates = dedup.find_new_candidate_pairs([dict(r) for r in db.get_all_prospects()])
+            st.caption(
+                f"{len(dupes)} confirmed duplicate pair(s) on file, "
+                f"{len(pending_candidates)} new candidate pair(s) pending review. "
+                f"Last checked: {last_scan_display}."
+            )
+            st.caption(
+                "Candidate pairs are cheap to generate; each is LLM-adjudicated with "
+                "HQ, CRD, and AUM context before being reported, to avoid flagging "
+                "genuinely different entities such as a US firm and its overseas "
+                "affiliate. Every verdict is remembered, so a scan only checks "
+                "genuinely new candidate pairs."
+            )
+            if st.button(f"🔎 Run duplicate scan ({len(pending_candidates)} pending)", disabled=not pending_candidates):
+                progress = st.progress(0.0)
+                status_text = st.empty()
+                confirmed = 0
+                for i, (a, b) in enumerate(pending_candidates, start=1):
+                    same, reason = dedup.llm_adjudicate_pair(a, b)
+                    db.record_dedup_verdict(a["id"], b["id"], same, reason)
+                    if same:
+                        confirmed += 1
+                    progress.progress(i / len(pending_candidates))
+                    status_text.text(f"{i}/{len(pending_candidates)} checked, {confirmed} duplicate(s) found")
+                progress.empty()
+                status_text.empty()
+                settings.set("dedup_last_scan_at", datetime.now(timezone.utc).isoformat())
+                st.success(f"Scan complete: {confirmed} new duplicate pair(s) found out of {len(pending_candidates)} checked.")
+                st.rerun()
+
+            if dupes:
+                st.caption("Review before merging:")
                 for i, pair in enumerate(dupes):
                     with st.container(border=True):
                         cols = st.columns([3, 3, 2, 1, 1])

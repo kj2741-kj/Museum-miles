@@ -12,6 +12,27 @@ from core import config
 from sec import db
 from core import formatting
 
+
+def _linkedin_name_split(contact_name, person_override) -> tuple[str, str]:
+    """First/last name for LinkedIn matching purposes -- prefers a
+    user-confirmed correction (core/linkedin_override.py) over the raw
+    SEC-filed name, since that's more likely to match the person's real
+    profile. Returns ("", "") when there's nothing splittable (2026-07-17,
+    requested so the exported Excel can be used directly for LinkedIn
+    Matched Audiences without needing the separate CSV exporter).
+
+    Deferred import: linkedin_export.py imports _slug/_format_aum from this
+    same module, so importing it back at module level here would be
+    circular. Safe as a local import since both modules are fully loaded
+    by the time this function actually runs."""
+    from sec import linkedin_export
+
+    name = person_override or contact_name
+    if not name or (isinstance(name, float)):  # pandas NaN for a missing value
+        return "", ""
+    split = linkedin_export.split_name(name)
+    return split if split else ("", "")
+
 EXPORTS_DIR = config.BASE_DIR / "exports" / "sec"
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -54,12 +75,22 @@ def export_prospects(df: pd.DataFrame, states: list[str], cities: list[str], aum
     export_cols = [
         "firm_name", "prospect_type", "hq_city", "hq_state", "aum",
         "contact_name", "contact_title", "email", "email_verified",
-        "email_source", "website", "status", "notes",
+        "email_source", "website", "status", "notes", "linkedin_person_override",
     ]
     cols = [c for c in export_cols if c in df.columns]
     out = df[cols].copy()
     if "aum" in out.columns:
         out["aum"] = out["aum"].apply(formatting.format_aum)
+
+    # LinkedIn First/Last Name, split from the contact name (preferring a
+    # user-confirmed correction over the raw filed name) -- so this export
+    # can be used directly for a LinkedIn Matched Audiences upload without
+    # needing the separate CSV exporter (2026-07-17).
+    splits = out.apply(lambda r: _linkedin_name_split(r.get("contact_name"), r.get("linkedin_person_override")), axis=1)
+    out["LinkedIn First Name"] = [s[0] for s in splits]
+    out["LinkedIn Last Name"] = [s[1] for s in splits]
+    out = out.drop(columns=[c for c in ["linkedin_person_override"] if c in out.columns])
+
     out = out.rename(columns={
         "firm_name": "Firm", "prospect_type": "Type", "hq_city": "City",
         "hq_state": "State", "aum": "AUM", "contact_name": "Contact",
@@ -73,13 +104,19 @@ def export_prospects(df: pd.DataFrame, states: list[str], cities: list[str], aum
     # rather than exploding the main sheet into multiple rows per firm.
     contact_cols = [
         "firm_name", "contact_name", "contact_title", "email",
-        "email_verified", "email_source", "linkedin_profile_url",
+        "email_verified", "email_source", "linkedin_profile_url", "linkedin_person_override",
     ]
     all_contacts = pd.DataFrame([dict(r) for r in db.get_all_contacts()])
     if not all_contacts.empty:
         extra_out = all_contacts[all_contacts["prospect_id"].isin(df["id"])][contact_cols].copy()
     else:
         extra_out = pd.DataFrame(columns=contact_cols)
+
+    extra_splits = extra_out.apply(lambda r: _linkedin_name_split(r.get("contact_name"), r.get("linkedin_person_override")), axis=1)
+    extra_out["LinkedIn First Name"] = [s[0] for s in extra_splits] if len(extra_out) else []
+    extra_out["LinkedIn Last Name"] = [s[1] for s in extra_splits] if len(extra_out) else []
+    extra_out = extra_out.drop(columns=[c for c in ["linkedin_person_override"] if c in extra_out.columns])
+
     extra_out = extra_out.rename(columns={
         "firm_name": "Firm", "contact_name": "Contact", "contact_title": "Title",
         "email": "Email", "email_verified": "Verified", "email_source": "Email Source",
@@ -134,18 +171,22 @@ def export_full_database() -> "Path":
             "CRD": p.get("crd_number"), "Status": p["status"],
         }
         if p["contact_name"] or p["email"]:
+            first, last = _linkedin_name_split(p["contact_name"], p.get("linkedin_person_override"))
             rows.append({
                 **base, "Contact": p["contact_name"], "Title": p["contact_title"],
                 "Email": p["email"], "Verified": bool(p["email_verified"]),
                 "Email Source": p["email_source"], "Is Primary Contact": True,
                 "Find This Person": p["linkedin_profile_url"],
+                "LinkedIn First Name": first, "LinkedIn Last Name": last,
             })
         for c in contacts_by_prospect.get(p["id"], []):
+            first, last = _linkedin_name_split(c["contact_name"], c.get("linkedin_person_override"))
             rows.append({
                 **base, "Contact": c["contact_name"], "Title": c["contact_title"],
                 "Email": c["email"], "Verified": bool(c["email_verified"]),
                 "Email Source": c["email_source"], "Is Primary Contact": False,
                 "Find This Person": c["linkedin_profile_url"],
+                "LinkedIn First Name": first, "LinkedIn Last Name": last,
             })
         if not p["contact_name"] and not p["email"] and not contacts_by_prospect.get(p["id"]):
             # No contact found at all for this firm -- still worth listing
@@ -153,12 +194,13 @@ def export_full_database() -> "Path":
             rows.append({
                 **base, "Contact": None, "Title": None, "Email": None,
                 "Verified": False, "Email Source": None, "Is Primary Contact": False,
-                "Find This Person": None,
+                "Find This Person": None, "LinkedIn First Name": "", "LinkedIn Last Name": "",
             })
 
     cols = [
         "Firm", "Type", "Contact", "Title", "Email", "Verified", "Email Source",
         "Is Primary Contact", "AUM", "City", "State", "Website", "CRD", "Status", "Find This Person",
+        "LinkedIn First Name", "LinkedIn Last Name",
     ]
     out = pd.DataFrame(rows, columns=cols)
 
