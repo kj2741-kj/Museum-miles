@@ -269,6 +269,15 @@ def extract_senior_person(text: str) -> tuple[str, str] | None:
 # has 3 real people this way) — this is the main source that makes multiple
 # real contacts per firm possible, not just a single best guess.
 _PART2B_HEADING_RE = re.compile(r"form\s+adv\s+part\s+2b", re.I)
+
+# A firm's own legal name never ends in one of these when it's genuinely a
+# person's job title -- used to reject a firm name being mistaken for a
+# title (see the "<Title> - <Name>" fallback below).
+_ENTITY_SUFFIX_RE = re.compile(
+    r"\b(L\.?L\.?C|L\.?L\.?P|L\.?P|PLLC|GP|Inc(?:orporated)?|Corp(?:oration)?|Ltd)\.?\s*$",
+    re.IGNORECASE,
+)
+
 _PART2B_TITLE_KEYWORDS = (
     "officer", "director", "president", "partner", "advisor", "adviser",
     "manager", "counsel", "analyst", "associate", "principal", "founder",
@@ -279,6 +288,36 @@ _PART2B_TITLE_KEYWORDS = (
 def _looks_like_title_line(line: str) -> bool:
     low = line.lower()
     return any(kw in low for kw in _PART2B_TITLE_KEYWORDS)
+
+
+# Every word in a candidate title must be one of these (or a stopword) --
+# built from every real title seen across this project so far. A DBA/brand
+# name (e.g. "Paradigm Wealth Partners", "Going CPAs & Wealth Advisors")
+# almost always contains at least one distinctive word that ISN'T part of
+# the standard title vocabulary, unlike a real (possibly compound) job
+# title -- unlike _looks_like_title_line()'s substring match (which
+# "Partners"/"Advisors" alone can slip through), this catches the whole
+# phrase, not just one keyword in it. Found live 2026-07-18 via two real
+# false positives during the Part 2B title rescan.
+_TITLE_VOCAB = {
+    "principal", "executive", "officer", "management", "persons", "managing",
+    "director", "private", "wealth", "advisor", "adviser", "chief", "compliance",
+    "client", "relations", "vice", "president", "partner", "partners",
+    "financial", "manager", "managers", "planner", "coach", "founder", "owner",
+    "member", "analyst", "associate", "counsel", "representative", "portfolio",
+    "investment", "investments", "senior", "regional", "relationship",
+    "registered", "trustee", "secretary", "treasurer", "operations",
+    "operating", "supervisor", "supervisory", "general", "assistant", "lead",
+    "head", "cofounder", "deputy", "ceo", "cfo", "coo", "cio", "cco",
+}
+_TITLE_STOPWORDS = {"and", "of", "the", "a", "for", "or"}
+
+
+def _looks_like_real_title(candidate: str) -> bool:
+    words = re.findall(r"[a-z]+", candidate.lower())
+    if not words:
+        return False
+    return all(w in _TITLE_VOCAB or w in _TITLE_STOPWORDS for w in words)
 
 
 def extract_part2b_people(text: str) -> list[tuple[str, str, str]]:
@@ -344,14 +383,25 @@ def extract_part2b_people(text: str) -> list[tuple[str, str, str]]:
 
         title = ""
         for k in range(j + 1, min(j + 3, len(lines))):
+            # Real false positive found live 2026-07-18 (Going CPAs & Wealth
+            # Advisors, LLP): the firm's own name repeats near the person's
+            # name in some Part 2B layouts and contains a title keyword
+            # ("Advisors") -- pre-existing gap, not introduced by the
+            # fallback below, just unmasked by testing more firms. Fixed by
+            # validating the WHOLE candidate against _looks_like_real_title()
+            # (every word must be recognized title vocabulary), not just a
+            # substring match -- a business name almost always contains at
+            # least one word (e.g. "Going", "Paradigm") that isn't.
             if lines[k] and _looks_like_title_line(lines[k]):
-                title = re.sub(r"\s+", " ", lines[k]).strip()
+                candidate = re.sub(r"\s+", " ", lines[k]).strip()
                 # A title can wrap onto the next line (e.g. "Managing
                 # Director, Private Wealth Advisor, and" / "Chief
                 # Compliance Officer") — found live (Vigil Wealth). Append
                 # the continuation rather than leave a dangling "and"/"&".
-                if title.endswith(("and", "&")) and k + 1 < len(lines) and lines[k + 1]:
-                    title = re.sub(r"\s+", " ", f"{title} {lines[k + 1]}").strip()
+                if candidate.endswith(("and", "&")) and k + 1 < len(lines) and lines[k + 1]:
+                    candidate = re.sub(r"\s+", " ", f"{candidate} {lines[k + 1]}").strip()
+                if _looks_like_real_title(candidate) and not _ENTITY_SUFFIX_RE.search(candidate):
+                    title = candidate
                 break
 
         # Fallback layout, found live 2026-07-17 (Provision Asset, LLC):
@@ -362,6 +412,17 @@ def extract_part2b_people(text: str) -> list[tuple[str, str, str]]:
         # "<Name>, <Title>". Only matched within this person's own window
         # and only when the line ends in exactly their own name, so it
         # can't misattribute a different person's title.
+        #
+        # Real false positives found live during the first two rescan
+        # attempts (2026-07-18): a firm's own name ("Going CPAs & Wealth
+        # Advisors, LLP") and a DBA/brand name shared by several advisors
+        # ("Paradigm Wealth Partners", no legal suffix at all) both got
+        # captured as a "title" -- `_looks_like_title_line()`'s substring
+        # match and `not looks_like_real_name()` aren't enough on their own.
+        # `_looks_like_real_title()` (every word must be recognized title
+        # vocabulary) catches both, since a business/brand name almost
+        # always contains at least one word ("Going", "Paradigm") that
+        # isn't part of that vocabulary.
         if not title:
             name_suffix_re = re.compile(r"^(.+?)\s*-\s*" + re.escape(name_only) + r"\s*$")
             for k in range(j + 1, window_end):
@@ -371,7 +432,12 @@ def extract_part2b_people(text: str) -> list[tuple[str, str, str]]:
                 m = name_suffix_re.match(line)
                 if m:
                     candidate = re.sub(r"\s+", " ", m.group(1)).strip()
-                    if candidate and not looks_like_real_name(candidate):
+                    if (
+                        candidate
+                        and _looks_like_real_title(candidate)
+                        and not looks_like_real_name(candidate)
+                        and not _ENTITY_SUFFIX_RE.search(candidate)
+                    ):
                         title = candidate
                         break
 
