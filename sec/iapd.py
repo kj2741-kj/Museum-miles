@@ -334,6 +334,14 @@ def extract_part2b_people(text: str) -> list[tuple[str, str, str]]:
         if not name_only or name_only.lower() in seen:
             continue
 
+        # Bounds this person's own supplement window, stopping at "Item 2"
+        # (where the career-history narrative begins) so later searches
+        # (title fallback, email) never reach into unrelated later content
+        # or the next person's own section.
+        window_end = j + 1
+        while window_end < len(lines) and window_end < j + 25 and not lines[window_end].lower().startswith("item 2"):
+            window_end += 1
+
         title = ""
         for k in range(j + 1, min(j + 3, len(lines))):
             if lines[k] and _looks_like_title_line(lines[k]):
@@ -346,14 +354,30 @@ def extract_part2b_people(text: str) -> list[tuple[str, str, str]]:
                     title = re.sub(r"\s+", " ", f"{title} {lines[k + 1]}").strip()
                 break
 
+        # Fallback layout, found live 2026-07-17 (Provision Asset, LLC):
+        # some brochures never state the title right under the Part 2B
+        # heading at all (the cover page there is just an office address
+        # block) -- the title only appears later, on the "Supervised Person
+        # Brochure" page, reversed as "<Title> - <Name>" instead of
+        # "<Name>, <Title>". Only matched within this person's own window
+        # and only when the line ends in exactly their own name, so it
+        # can't misattribute a different person's title.
+        if not title:
+            name_suffix_re = re.compile(r"^(.+?)\s*-\s*" + re.escape(name_only) + r"\s*$")
+            for k in range(j + 1, window_end):
+                line = lines[k]
+                if not line or re.search(r"\.{3,}\s*\d+\s*$", line):
+                    continue
+                m = name_suffix_re.match(line)
+                if m:
+                    candidate = re.sub(r"\s+", " ", m.group(1)).strip()
+                    if candidate and not looks_like_real_name(candidate):
+                        title = candidate
+                        break
+
         # Rare, but real (sole-proprietor firms) — scan this person's own
-        # supplement window for an email, stopping at "Item 2" (where the
-        # career-history narrative begins) so this never reaches into
-        # unrelated later content.
+        # supplement window for an email.
         email = ""
-        window_end = j + 1
-        while window_end < len(lines) and window_end < j + 25 and not lines[window_end].lower().startswith("item 2"):
-            window_end += 1
         window_text = " ".join(lines[j + 1:window_end])
         for m in _EMAIL_RE.finditer(window_text):
             candidate = m.group(0).lower()

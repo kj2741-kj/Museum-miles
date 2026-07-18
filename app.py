@@ -290,7 +290,7 @@ with tab_sec:
             contact_rows = []
             if pd.notna(selected_row.get("contact_name")):
                 contact_rows.append({
-                    "Role": "Primary", "Contact": selected_row["contact_name"],
+                    "Contact Type": "Main contact", "Contact": selected_row["contact_name"],
                     "Title": selected_row.get("contact_title") or "",
                     "Email": selected_row.get("email") or "",
                     "Verified": bool(selected_row.get("email_verified")),
@@ -298,7 +298,7 @@ with tab_sec:
                 })
             for c in db.get_contacts_for_prospect(selected_id):
                 contact_rows.append({
-                    "Role": "Secondary", "Contact": c["contact_name"],
+                    "Contact Type": "Additional contact", "Contact": c["contact_name"],
                     "Title": c["contact_title"] or "", "Email": c["email"] or "",
                     "Verified": bool(c["email_verified"]),
                     "Find This Person": c["linkedin_profile_url"] or "",
