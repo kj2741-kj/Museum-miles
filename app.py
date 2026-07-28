@@ -458,7 +458,27 @@ with tab_sec:
                        f"2 sheets (Prospects and Additional Contacts).")
             if st.button("💾 Export current view"):
                 path = excel_export.export_prospects(df, state_filter, city_filter, narrowed_aum_range)
-                st.success(f"Saved to {path}")
+                st.session_state["sec_export_current_bytes"] = path.read_bytes()
+                st.session_state["sec_export_current_name"] = path.name
+            # Real bug found live 2026-07-28 (Mayank): on Streamlit Cloud,
+            # "Saved to {path}" pointed at /mount/src/museum-miles/... --
+            # the CLOUD SERVER's own filesystem, not Mayank's computer. There
+            # is no way to browse to it; it's also wiped on every redeploy.
+            # Writing to disk only ever worked for local runs, where the app
+            # and the user share a filesystem. download_button actually
+            # streams the file to the browser -- works locally too, strict
+            # improvement. Cached in session_state so the download button
+            # survives the rerun its own click triggers (a plain local
+            # variable would vanish, since st.button's True state only lasts
+            # for the run it was clicked in).
+            if "sec_export_current_bytes" in st.session_state:
+                st.download_button(
+                    "⬇️ Download Excel file",
+                    data=st.session_state["sec_export_current_bytes"],
+                    file_name=st.session_state["sec_export_current_name"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="sec_export_current_download",
+                )
         with export_cols[1]:
             st.caption("**Full contact database**: every SEC prospect and contact, "
                        "one row per person, with AUM, City, and State on every row for "
@@ -467,7 +487,16 @@ with tab_sec:
             if st.button("💾 Export full contact database"):
                 with st.spinner("Building full export (may take a minute for 60k+ rows)..."):
                     path = excel_export.export_full_database()
-                st.success(f"Saved to {path}")
+                st.session_state["sec_export_full_bytes"] = path.read_bytes()
+                st.session_state["sec_export_full_name"] = path.name
+            if "sec_export_full_bytes" in st.session_state:
+                st.download_button(
+                    "⬇️ Download Excel file",
+                    data=st.session_state["sec_export_full_bytes"],
+                    file_name=st.session_state["sec_export_full_name"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="sec_export_full_download",
+                )
 
         # --- Retry previously-failed, scoped to whatever is currently filtered above ---
         st.divider()
@@ -901,7 +930,19 @@ with tab_nfa:
                        f"2 sheets (Firms and Principals).")
             if st.button("💾 Export current view", key="nfa_export_current"):
                 path = nfa_excel_export.export_firms(nfa_df, nfa_state_filter, reg_type_filter)
-                st.success(f"Saved to {path}")
+                st.session_state["nfa_export_current_bytes"] = path.read_bytes()
+                st.session_state["nfa_export_current_name"] = path.name
+            # See the SEC tab's equivalent comment above (Excel export
+            # section) for why this is a download_button, not "Saved to
+            # {path}" -- same fix, same reason.
+            if "nfa_export_current_bytes" in st.session_state:
+                st.download_button(
+                    "⬇️ Download Excel file",
+                    data=st.session_state["nfa_export_current_bytes"],
+                    file_name=st.session_state["nfa_export_current_name"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="nfa_export_current_download",
+                )
         with nfa_export_cols[1]:
             st.caption("**Full contact database**: every NFA firm and principal, one row "
                        "per person, with City and State on every row for easy filtering. "
@@ -909,4 +950,13 @@ with tab_nfa:
             if st.button("💾 Export full contact database", key="nfa_export_full"):
                 with st.spinner("Building full export..."):
                     path = nfa_excel_export.export_full_database()
-                st.success(f"Saved to {path}")
+                st.session_state["nfa_export_full_bytes"] = path.read_bytes()
+                st.session_state["nfa_export_full_name"] = path.name
+            if "nfa_export_full_bytes" in st.session_state:
+                st.download_button(
+                    "⬇️ Download Excel file",
+                    data=st.session_state["nfa_export_full_bytes"],
+                    file_name=st.session_state["nfa_export_full_name"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="nfa_export_full_download",
+                )
