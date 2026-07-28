@@ -84,12 +84,16 @@ def export_firms(df: pd.DataFrame, states: list[str], reg_types: list[str]) -> "
         out.to_excel(writer, index=False, sheet_name="Firms")
         principals_out.to_excel(writer, index=False, sheet_name="Principals")
 
+    # See sec/excel_export.py's export_prospects() for why fillna("") is
+    # needed before astype(str) here (Arrow-vs-NumPy pandas backend
+    # difference between local dev and Streamlit Cloud's Python 3.14 --
+    # same bug, found live on this exact NFA export, 2026-07-27).
     from openpyxl import load_workbook
     wb = load_workbook(path)
     for sheet_name, sheet_df in (("Firms", out), ("Principals", principals_out)):
         ws = wb[sheet_name]
         for i, col in enumerate(sheet_df.columns, start=1):
-            width = max(sheet_df[col].astype(str).map(len).max() if len(sheet_df) else 0, len(col)) + 2
+            width = max(sheet_df[col].fillna("").astype(str).map(len).max() if len(sheet_df) else 0, len(col)) + 2
             ws.column_dimensions[get_column_letter(i)].width = min(width, 50)
     wb.save(path)
 
@@ -151,7 +155,7 @@ def export_full_database() -> "Path":
     wb = load_workbook(path)
     ws = wb["All Contacts"]
     for i, col in enumerate(out.columns, start=1):
-        width = max(out[col].astype(str).map(len).max() if len(out) else 0, len(col)) + 2
+        width = max(out[col].fillna("").astype(str).map(len).max() if len(out) else 0, len(col)) + 2
         ws.column_dimensions[get_column_letter(i)].width = min(width, 50)
     wb.save(path)
 

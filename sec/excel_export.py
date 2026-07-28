@@ -129,12 +129,20 @@ def export_prospects(df: pd.DataFrame, states: list[str], cities: list[str], aum
         out.to_excel(writer, index=False, sheet_name="Prospects")
         extra_out.to_excel(writer, index=False, sheet_name="Additional Contacts")
 
+    # Real bug found live 2026-07-27 (Mayank, on Streamlit Cloud): a NaN/None
+    # cell surviving .astype(str) becomes the literal string "nan" under
+    # NumPy-backed pandas (works fine), but stays a real null under the
+    # Arrow-backed pandas Streamlit Cloud's Python 3.14 build uses -- and
+    # len(pd.NA) raises TypeError, crashing the whole export on any blank
+    # cell. Never reproduced locally for exactly that reason (different
+    # pandas backend). fillna("") resolves the null BEFORE the
+    # backend-dependent stringification, so it's safe either way.
     from openpyxl import load_workbook
     wb = load_workbook(path)
     for sheet_name, sheet_df in (("Prospects", out), ("Additional Contacts", extra_out)):
         ws = wb[sheet_name]
         for i, col in enumerate(sheet_df.columns, start=1):
-            width = max(sheet_df[col].astype(str).map(len).max() if len(sheet_df) else 0, len(col)) + 2
+            width = max(sheet_df[col].fillna("").astype(str).map(len).max() if len(sheet_df) else 0, len(col)) + 2
             ws.column_dimensions[get_column_letter(i)].width = min(width, 50)
     wb.save(path)
 
@@ -142,11 +150,13 @@ def export_prospects(df: pd.DataFrame, states: list[str], cities: list[str], aum
 
 
 def _autofit(path, sheet_name: str, sheet_df: pd.DataFrame) -> None:
+    """See export_prospects()'s fillna("") comment above -- same
+    Arrow-vs-NumPy pandas backend fix, needed here too."""
     from openpyxl import load_workbook
     wb = load_workbook(path)
     ws = wb[sheet_name]
     for i, col in enumerate(sheet_df.columns, start=1):
-        width = max(sheet_df[col].astype(str).map(len).max() if len(sheet_df) else 0, len(col)) + 2
+        width = max(sheet_df[col].fillna("").astype(str).map(len).max() if len(sheet_df) else 0, len(col)) + 2
         ws.column_dimensions[get_column_letter(i)].width = min(width, 50)
     wb.save(path)
 
