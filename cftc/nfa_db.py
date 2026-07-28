@@ -94,6 +94,11 @@ _MIGRATIONS = [
     # Same confirmed-profile-URL mechanism as sec/db.py -- see that file's
     # migration comment.
     "ALTER TABLE nfa_principals ADD COLUMN linkedin_url_confirmed INTEGER DEFAULT 0",
+    # Manual website-search fallback (2026-07-27, core/web_search_url.py) --
+    # set only when domain-guessing found nothing, so Mayank has a one-click
+    # path instead of no lead at all. Same "honest ceiling" pattern as
+    # linkedin_profile_url on the principals side.
+    "ALTER TABLE nfa_firms ADD COLUMN website_search_url TEXT",
 ]
 
 

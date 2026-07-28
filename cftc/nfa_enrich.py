@@ -48,6 +48,7 @@ from sec import dedup
 from sec import enrich
 from sec import iapd
 from core import linkedin_url
+from core import web_search_url
 from cftc import nfa_db
 
 _PAGE_TIMEOUT = 5
@@ -110,12 +111,37 @@ def candidate_domains(firm_name: str, extra_tlds: bool = False) -> list[tuple[st
     also tries .net/.org/.co on the same bases, for firms where every .com
     guess already came back empty -- many boutique CTAs/CPOs use a non-.com
     TLD. Off by default (keeps the original P2 pass's behavior/cost
-    unchanged) since it multiplies request count ~4x."""
+    unchanged) since it multiplies request count ~4x.
+
+    Real bug found live 2026-07-24: when the cleaned name is only ONE word
+    (either a genuinely single-word firm name, or a multi-word name that
+    collapses to one word after _clean_for_domain strips every legal
+    suffix -- e.g. "GLOBAL AG LLC" loses both "LLC" and "AG", the latter
+    being a real legal-entity marker (German Aktiengesellschaft) as well as
+    a plausible ordinary word), the joined/hyphenated/first-word candidates
+    are all the IDENTICAL string. The dedup loop below kept only the FIRST
+    occurrence's is_single flag, which was always the joined-name candidate
+    (False) -- so a one-word name silently got the weak "any(t in lowered)"
+    check instead of the stricter require_secondary check that flag exists
+    to trigger. Confirmed live: "apm.net" (an unrelated German anti-
+    counterfeiting association) and "avm.net" (an unrelated Dutch design
+    agency) both "verified" this way for firms named APM / AVM LP -- the
+    weak check just needed the page to mention the word "apm"/"avm"
+    ANYWHERE, which a same-initialism site trivially does. Fixed: a
+    single-word name marks every candidate is_single=True, since there is
+    no compounded multi-word base to lend it any extra confidence -- this
+    correctly makes `_looks_like_firm_page`'s require_secondary check
+    always reject single-word names (no second token exists to verify
+    against the page title), the same "leave it blank rather than guess
+    wrong" tradeoff already applied everywhere else in this pipeline."""
     clean = _clean_for_domain(firm_name)
     words = re.findall(r"[A-Za-z0-9]+", clean.lower())
     if not words:
         return []
-    candidates = [("".join(words), False), ("-".join(words), False), (words[0], True)]
+    single_word = len(words) == 1
+    candidates = [
+        ("".join(words), single_word), ("-".join(words), single_word), (words[0], True),
+    ]
     tlds = ("com",) + _EXTRA_TLDS if extra_tlds else ("com",)
     seen: set[str] = set()
     out = []
@@ -151,7 +177,19 @@ def _page_title(html_text: str) -> str:
 
 
 def _looks_like_firm_page(html_text: str, firm_name: str, require_secondary: bool = False) -> bool:
-    lowered = html_text.lower()
+    # Real bug found live 2026-07-27: html_text used to already be truncated
+    # to 20KB by the caller before reaching here, so the require_secondary
+    # path's <title> check silently failed on any modern JS-framework site
+    # with a large inline <style>/<script> blob before <head> finishes --
+    # confirmed live on kirkoswald.com (real, correct domain for "KIRKOSWALD
+    # CAPITAL PARTNERS LLP"): its <title> ("Kirkoswald Capital Partners LLP")
+    # doesn't appear until character 814,339 of an 839KB page, 40x past the
+    # old cutoff. Caller now passes the FULL response text; the cheap
+    # junk/parking-page check and plain token scan stay bounded to the first
+    # 20KB (real signal, if present, is always near the top for those), but
+    # title extraction gets the whole document since a real title tag can
+    # legitimately live anywhere before </head>.
+    lowered = html_text[:20000].lower()
     if any(marker in lowered for marker in _PARKING_PAGE_MARKERS):
         return False
     tokens = [
@@ -195,21 +233,41 @@ def guess_website(firm_name: str, extra_tlds: bool = False) -> str | None:
                 resp = requests.get(f"{scheme}{domain}", headers=enrich.HEADERS, timeout=_PAGE_TIMEOUT)
             except Exception:
                 continue
-            if resp.status_code == 200 and _looks_like_firm_page(resp.text[:20000], firm_name, require_secondary=is_single):
+            # Pass the full page, not a 20KB slice -- see _looks_like_firm_page's
+            # own comment for why (title tags on modern JS-heavy sites can sit
+            # far past 20KB). Still capped at 2MB as a defensive guard against
+            # a pathological/huge response, generous relative to every real
+            # page seen so far (largest confirmed real case: 839KB).
+            if resp.status_code == 200 and _looks_like_firm_page(resp.text[:2_000_000], firm_name, require_secondary=is_single):
                 return domain
     return None
 
 
 def build_sec_crossref_map() -> dict[str, str]:
-    """canonical firm name -> website, for every SEC prospect that has one.
-    Built once per batch run (not per-firm) -- cheap, in-memory, no repeated
-    DB round-trips."""
+    """canonical firm name -> website, for every SEC prospect that has a
+    USABLE (non-social-media) website. Built once per batch run (not
+    per-firm) -- cheap, in-memory, no repeated DB round-trips.
+
+    Real bug found live 2026-07-24: the SEC side stores a filer's raw ADV
+    "website" field as-is even when it's a LinkedIn/Facebook/X/etc. URL and
+    no real domain could be recovered from its brochure (sec/enrich.py only
+    overwrites that column when a brochure-recovered domain is found -- see
+    its own `website_fields` gating) -- SEC's own dashboard never shows this
+    as a misleading "website" because `enrich._domain_of()` filters it out
+    of every SEC-side use. This crossref, though, was reading the raw column
+    directly and handing a literal `linkedin.com/company/...` straight to
+    an NFA firm as its resolved website (tagged `SEC_ADV_crossref`, treated
+    as trustworthy) -- 52 real NFA firms confirmed affected (BlackRock,
+    Pershing Square, AllianceBernstein, etc.), all via this exact path.
+    Filtered with the same `enrich._domain_of()` check used everywhere else
+    in this pipeline, so a junk domain here now correctly falls through to
+    `guess_website()` instead of being trusted as-is."""
     from sec import db as sec_db
 
     out: dict[str, str] = {}
     for row in sec_db.get_all_prospects():
         website = row["website"]
-        if not website:
+        if not website or not enrich._domain_of(website):
             continue
         key = dedup.canonicalize(row["firm_name"])
         if key and key not in out:
@@ -257,9 +315,15 @@ def _best_verified_candidate(candidates: list[str]) -> tuple[str | None, bool, s
 
 
 def enrich_firm(firm: dict, principals: list[dict], sec_crossref: dict[str, str], extra_tlds: bool = False) -> dict:
-    """Returns {'website': ..., 'website_source': ..., 'principals': [{'id', 'email', 'email_verified', 'email_source', 'linkedin_profile_url'}, ...]}."""
+    """Returns {'website': ..., 'website_source': ..., 'website_search_url': ..., 'principals': [{'id', 'email', 'email_verified', 'email_source', 'linkedin_profile_url'}, ...]}."""
     website, website_source = resolve_website(firm["firm_name"], sec_crossref, extra_tlds=extra_tlds)
     domain = enrich._domain_of(website) if website else None
+    # No domain found -- give Mayank a one-click manual path instead of
+    # nothing (see core/web_search_url.py). Cleared once a real website is
+    # found, since the fallback is only useful in its absence.
+    search_url = None if website else web_search_url.build_firm_website_search_url(
+        firm["firm_name"], firm.get("state")
+    )
     scraped = enrich.discover_emails_from_website(website) if website else []
 
     principal_updates = []
@@ -305,7 +369,10 @@ def enrich_firm(firm: dict, principals: list[dict], sec_crossref: dict[str, str]
             "notes": reason if email and not verified else None,
         })
 
-    return {"website": website, "website_source": website_source, "principals": principal_updates}
+    return {
+        "website": website, "website_source": website_source,
+        "website_search_url": search_url, "principals": principal_updates,
+    }
 
 
 def enrich_firms(
@@ -363,7 +430,10 @@ def enrich_firms(
                     progress_callback(done, len(to_process))
                 continue
 
-            nfa_db.update_firm(fid, website=outcome["website"], website_source=outcome["website_source"])
+            nfa_db.update_firm(
+                fid, website=outcome["website"], website_source=outcome["website_source"],
+                website_search_url=outcome["website_search_url"],
+            )
             if outcome["website"]:
                 results["enriched_website"] += 1
             else:

@@ -224,8 +224,6 @@ with tab_sec:
                 if df.empty:
                     st.caption(f"No close matches found for \"{firm_search}\".")
 
-        df = df.assign(aum_display=df["aum"].apply(formatting.format_aum))
-
         # Reverse of the NFA tab's "Also SEC-Registered" flag -- built from
         # the same nfa_firms.sec_prospect_id link (crosslink_nfa_sec.py),
         # just queried in the other direction here.
@@ -233,7 +231,7 @@ with tab_sec:
         df = df.assign(also_nfa=df["id"].isin(also_nfa_ids))
 
         display_cols = [
-            "firm_name", "prospect_type", "hq_city", "hq_state", "aum_display",
+            "firm_name", "prospect_type", "hq_city", "hq_state", "aum",
             "contact_name", "contact_title", "email", "email_verified", "website",
             "linkedin_profile_url", "linkedin_search_url", "status", "also_nfa",
         ]
@@ -243,15 +241,25 @@ with tab_sec:
             df[display_cols].rename(columns={
                 "firm_name": "Firm", "prospect_type": "Type", "hq_city": "City",
                 "also_nfa": "Also NFA-Registered",
-                "hq_state": "State", "aum_display": "AUM", "contact_name": "Contact",
+                "hq_state": "State", "aum": "AUM ($)", "contact_name": "Contact",
                 "contact_title": "Title", "email": "Email", "email_verified": "Verified",
                 "website": "Website", "linkedin_profile_url": "Find This Person",
                 "linkedin_search_url": "LinkedIn Search",
                 "status": "Status", "deregistered_at": "Deregistered",
             }),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             column_config={
+                # Real bug found live 2026-07-27 (Mayank): AUM used to be
+                # pre-formatted into a "$498.6M"-style string before reaching
+                # the table, so Streamlit sorted it alphabetically ("$1.2B" <
+                # "$498.6M" as text) instead of by actual size. Fixed by
+                # keeping AUM numeric and letting NumberColumn's "compact"
+                # format do the M/B/T abbreviation -- no built-in format
+                # combines compact abbreviation with a "$" prefix (checked
+                # Streamlit 1.45's own NumberColumn docs), so the "$" moved
+                # to the column header instead of repeating on every row.
+                "AUM ($)": st.column_config.NumberColumn(format="compact"),
                 "Verified": st.column_config.CheckboxColumn(),
                 "Website": st.column_config.LinkColumn(display_text=r"https?://(?:www\.)?([^/]+)"),
                 "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
@@ -262,16 +270,74 @@ with tab_sec:
             selection_mode="single-row",
             key="sec_main_table",
         )
-        st.caption(f"Showing {len(df)} of {total} prospects. Click a row to jump to it below.")
+        st.caption(
+            "Showing {} of {} prospects. To jump to a firm below, hover the "
+            "very left edge of its row until a checkbox appears, then click "
+            "it.".format(len(df), total)
+        )
 
-        # Clicking a row above jumps the "Contacts by firm" dropdown straight
-        # to that firm (2026-07-17, requested in place of double-click, which
-        # st.dataframe has no event for). Setting session_state for the
+        # Clicking a row's checkbox above (hover the far-left edge of the row
+        # to reveal it -- clicking the row's text does nothing, verified via
+        # live browser testing 2026-07-20) jumps the "Contacts by firm"
+        # dropdown straight to that firm. Setting session_state for the
         # selectbox's own key BEFORE it's instantiated below is what makes it
         # jump rather than just changing the default on first render.
         clicked_rows = table_event["selection"]["rows"] if table_event else []
         if clicked_rows:
             st.session_state["contacts_firm_select"] = df.iloc[clicked_rows[0]]["firm_name"]
+
+        # --- Contacts for the WHOLE filtered set (2026-07-27, Mayank's
+        # request): "select multiple firms, see all their contacts" turned
+        # out to mean this -- every contact across every currently-filtered
+        # firm, not a multi-row table selection. Reuses the exact same
+        # filtering pattern excel_export.py already uses (prospect_id.isin
+        # (df["id"])), just rendered in-app instead of written to a file, so
+        # this is what actually feeds "email/target these filtered firms."
+        st.divider()
+        st.subheader("📋 Contacts for all filtered firms")
+        if df.empty:
+            st.caption("No firms match the current filters.")
+        else:
+            agg_rows = []
+            for _, row in df.iterrows():
+                if pd.notna(row.get("contact_name")):
+                    agg_rows.append({
+                        "Firm": row["firm_name"], "Contact Type": "Main contact",
+                        "Contact": row["contact_name"], "Title": row.get("contact_title") or "",
+                        "Email": row.get("email") or "", "Verified": bool(row.get("email_verified")),
+                        "Find This Person": row.get("linkedin_profile_url") or "",
+                    })
+            all_contacts = pd.DataFrame([dict(r) for r in db.get_all_contacts()])
+            if not all_contacts.empty:
+                extra = all_contacts[all_contacts["prospect_id"].isin(df["id"])]
+                for _, c in extra.iterrows():
+                    agg_rows.append({
+                        "Firm": c["firm_name"], "Contact Type": "Additional contact",
+                        "Contact": c["contact_name"], "Title": c["contact_title"] or "",
+                        "Email": c["email"] or "", "Verified": bool(c["email_verified"]),
+                        "Find This Person": c["linkedin_profile_url"] or "",
+                    })
+
+            if not agg_rows:
+                st.caption("No contacts found yet for any of the currently filtered firms.")
+            else:
+                agg_df = pd.DataFrame(agg_rows)
+                cap = 300
+                if len(agg_df) > cap:
+                    st.caption(
+                        f"{len(agg_df)} contacts match your filters -- showing the first {cap}. "
+                        "Use \"Export to Excel\" below for the complete list."
+                    )
+                    agg_df = agg_df.head(cap)
+                else:
+                    st.caption(f"{len(agg_df)} contacts across {df['firm_name'].nunique()} filtered firms.")
+                st.dataframe(
+                    agg_df, use_container_width=True, hide_index=True,
+                    column_config={
+                        "Verified": st.column_config.CheckboxColumn(),
+                        "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
+                    },
+                )
 
         # --- Contacts by firm: pick a firm from the filtered list above,
         # see all its contacts (primary + secondary) together ---
@@ -309,7 +375,7 @@ with tab_sec:
             else:
                 st.dataframe(
                     pd.DataFrame(contact_rows),
-                    width="stretch", hide_index=True,
+                    use_container_width=True, hide_index=True,
                     column_config={
                         "Verified": st.column_config.CheckboxColumn(),
                         "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
@@ -324,11 +390,16 @@ with tab_sec:
             # a brand name from scratch wouldn't be.
             if llm_enabled:
                 st.markdown("**Correct a LinkedIn mismatch for this firm**")
+                # Keyed on a version counter, bumped after every successful
+                # save, so the box remounts empty -- popping the plain key
+                # alone doesn't reliably clear a text_area's browser-side
+                # value on rerun (verified live 2026-07-20).
+                sec_correction_version = st.session_state.setdefault("sec_correction_version", 0)
                 correction_text = st.text_area(
                     "Describe the correction, or paste a LinkedIn profile URL. "
                     "For example: \"the firm is called The Suby Group on LinkedIn\" "
                     "or \"he goes by Brad Benz\"",
-                    key="sec_linkedin_correction_text",
+                    key=f"sec_linkedin_correction_text_{sec_correction_version}",
                 )
                 if st.button("💾 Save correction", key="sec_linkedin_correction_save"):
                     if not correction_text.strip():
@@ -344,6 +415,7 @@ with tab_sec:
                             selected_id, linkedin_profile_url=pasted_url, linkedin_url_confirmed=1,
                         )
                         st.success(f"Saved confirmed profile link: {pasted_url}")
+                        st.session_state["sec_correction_version"] = sec_correction_version + 1
                         st.rerun()
                     elif correction_text.strip():
                         with st.spinner("Parsing correction..."):
@@ -371,6 +443,7 @@ with tab_sec:
                                 f"Person: {parsed['person_override'] or 'unchanged'}. "
                                 "This correction will keep applying after future re-enrichment."
                             )
+                            st.session_state["sec_correction_version"] = sec_correction_version + 1
                             st.rerun()
             else:
                 st.caption("Turn on \"Enable LLM-powered features\" in the sidebar to correct a LinkedIn mismatch.")
@@ -613,27 +686,33 @@ with tab_nfa:
 
         nfa_display_cols = [
             "firm_name", "reg_types", "city", "state", "membership_status",
-            "has_reg_actions", "website", "website_source", "also_sec", "crm_stage",
+            "has_reg_actions", "website", "website_source", "website_search_url",
+            "also_sec", "crm_stage",
         ]
         nfa_table_event = st.dataframe(
             nfa_df[nfa_display_cols].rename(columns={
                 "firm_name": "Firm", "reg_types": "Registration Types", "city": "City",
                 "state": "State", "membership_status": "Membership Status",
                 "has_reg_actions": "Reg Actions", "website": "Website",
-                "website_source": "Website Source", "also_sec": "Also SEC-Registered",
-                "crm_stage": "CRM Stage",
+                "website_source": "Website Source", "website_search_url": "Search for Website",
+                "also_sec": "Also SEC-Registered", "crm_stage": "CRM Stage",
             }),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             column_config={
                 "Website": st.column_config.LinkColumn(display_text=r"(?:https?://)?(?:www\.)?([^/]+)"),
+                "Search for Website": st.column_config.LinkColumn(display_text="🔍 Search"),
                 "Also SEC-Registered": st.column_config.CheckboxColumn(),
             },
             on_select="rerun",
             selection_mode="single-row",
             key="nfa_main_table",
         )
-        st.caption(f"Showing {len(nfa_df)} of {nfa_total} NFA firms. Click a row to jump to it below.")
+        st.caption(
+            "Showing {} of {} NFA firms. To jump to a firm below, hover the "
+            "very left edge of its row until a checkbox appears, then click "
+            "it.".format(len(nfa_df), nfa_total)
+        )
 
         nfa_clicked_rows = nfa_table_event["selection"]["rows"] if nfa_table_event else []
         if nfa_clicked_rows:
@@ -655,6 +734,52 @@ with tab_nfa:
                 nfa_db.update_firm(int(fid), crm_stage=new_stage)
             st.success(f"Moved {len(nfa_df)} firms to \"{new_stage}\".")
             st.rerun()
+
+        # --- Principals for the WHOLE filtered set (2026-07-27, mirrors the
+        # SEC tab's equivalent addition -- same "select multiple firms" ask,
+        # same fix: every principal across every currently-filtered firm). ---
+        st.divider()
+        st.subheader("📋 Principals for all filtered firms")
+        if nfa_df.empty:
+            st.caption("No firms match the current filters.")
+        else:
+            all_principals = pd.DataFrame([dict(r) for r in nfa_db.get_all_principals()])
+            agg_principals = (
+                all_principals[all_principals["firm_id"].isin(nfa_df["id"])]
+                if not all_principals.empty else pd.DataFrame()
+            )
+
+            if agg_principals.empty:
+                st.caption("No principals found yet for any of the currently filtered firms.")
+            else:
+                display_principals = agg_principals[[
+                    "firm_name", "name", "title", "ten_percent_owner", "email",
+                    "email_verified", "linkedin_profile_url",
+                ]].rename(columns={
+                    "firm_name": "Firm", "name": "Name", "title": "Title",
+                    "ten_percent_owner": "10%+ Owner", "email": "Email",
+                    "email_verified": "Verified", "linkedin_profile_url": "Find This Person",
+                })
+                cap = 300
+                if len(display_principals) > cap:
+                    st.caption(
+                        f"{len(display_principals)} principals match your filters -- showing "
+                        f"the first {cap}. Use \"Export to Excel\" below for the complete list."
+                    )
+                    display_principals = display_principals.head(cap)
+                else:
+                    st.caption(
+                        f"{len(display_principals)} principals across "
+                        f"{nfa_df['firm_name'].nunique()} filtered firms."
+                    )
+                st.dataframe(
+                    display_principals, use_container_width=True, hide_index=True,
+                    column_config={
+                        "Verified": st.column_config.CheckboxColumn(),
+                        "10%+ Owner": st.column_config.CheckboxColumn(),
+                        "Find This Person": st.column_config.LinkColumn(display_text="👤 Find"),
+                    },
+                )
 
         # --- Principals by firm: pick a firm from the filtered list above,
         # see all its principals (with email/verification) together ---
@@ -681,7 +806,7 @@ with tab_nfa:
                         "email": "Email", "email_verified": "Verified",
                         "linkedin_profile_url": "Find This Person",
                     }),
-                    width="stretch", hide_index=True,
+                    use_container_width=True, hide_index=True,
                     column_config={
                         "Verified": st.column_config.CheckboxColumn(),
                         "10%+ Owner": st.column_config.CheckboxColumn(),
@@ -707,10 +832,11 @@ with tab_nfa:
                     )
                     if principal_choice == "(firm name only)":
                         principal_choice = None
+                nfa_correction_version = st.session_state.setdefault("nfa_correction_version", 0)
                 nfa_correction_text = st.text_area(
                     "Describe the correction, or paste a LinkedIn profile URL. "
                     "For example: \"the firm is called X on LinkedIn\" or \"he goes by Y\"",
-                    key="nfa_linkedin_correction_text",
+                    key=f"nfa_linkedin_correction_text_{nfa_correction_version}",
                 )
                 if st.button("💾 Save correction", key="nfa_linkedin_correction_save"):
                     if not nfa_correction_text.strip():
@@ -727,6 +853,7 @@ with tab_nfa:
                         p = next(p for p in principal_dicts if p["name"] == principal_choice)
                         nfa_db.update_principal(p["id"], linkedin_profile_url=pasted_url, linkedin_url_confirmed=1)
                         st.success(f"Saved confirmed profile link for {principal_choice}: {pasted_url}")
+                        st.session_state["nfa_correction_version"] = nfa_correction_version + 1
                         st.rerun()
                     elif nfa_correction_text.strip():
                         with st.spinner("Parsing correction..."):
@@ -759,6 +886,7 @@ with tab_nfa:
                                 f"Person: {parsed['person_override'] or 'unchanged'}. "
                                 "This correction will keep applying after future re-enrichment."
                             )
+                            st.session_state["nfa_correction_version"] = nfa_correction_version + 1
                             st.rerun()
             else:
                 st.caption("Turn on \"Enable LLM-powered features\" in the sidebar to correct a LinkedIn mismatch.")
