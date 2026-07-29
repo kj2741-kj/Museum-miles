@@ -230,6 +230,11 @@ with tab_sec:
         also_nfa_ids = {f["sec_prospect_id"] for f in nfa_db.get_firms() if f["sec_prospect_id"]}
         df = df.assign(also_nfa=df["id"].isin(also_nfa_ids))
 
+        # Row count right under the filters (2026-07-29, Mayank's request) --
+        # previously this only appeared below the table and near export, both
+        # a scroll away from the filter controls themselves.
+        st.caption(f"**{len(df)} of {total} firms match your filters.**")
+
         display_cols = [
             "firm_name", "prospect_type", "hq_city", "hq_state", "aum",
             "contact_name", "contact_title", "email", "email_verified", "website",
@@ -712,6 +717,10 @@ with tab_nfa:
                     st.caption(f"No close matches found for \"{nfa_firm_search}\".")
 
         nfa_df = nfa_df.assign(also_sec=nfa_df["sec_prospect_id"].notna())
+
+        # Row count right under the filters -- see the SEC tab's identical
+        # addition above for why (Mayank's request, 2026-07-29).
+        st.caption(f"**{len(nfa_df)} of {nfa_total} firms match your filters.**")
 
         nfa_display_cols = [
             "firm_name", "reg_types", "city", "state", "membership_status",
