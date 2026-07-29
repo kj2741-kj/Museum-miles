@@ -302,39 +302,41 @@ with tab_sec:
                 "Also NFA-Registered": st.column_config.CheckboxColumn(),
             },
             on_select="rerun",
-            selection_mode="single-row",
+            selection_mode="multi-row",
             key="sec_main_table",
         )
         st.caption(
-            "Showing {} of {} prospects. To jump to a firm below, hover the "
-            "very left edge of its row until a checkbox appears, then click "
-            "it.".format(len(df), total)
+            "Showing {} of {} prospects. Hover the very left edge of a row "
+            "until a checkbox appears to select it -- check several to scope "
+            "\"Contacts for all filtered firms\" below to just those, or one "
+            "to jump \"Contacts by firm\" straight to it.".format(len(df), total)
         )
 
         # Clicking a row's checkbox above (hover the far-left edge of the row
         # to reveal it -- clicking the row's text does nothing, verified via
         # live browser testing 2026-07-20) jumps the "Contacts by firm"
-        # dropdown straight to that firm. Setting session_state for the
-        # selectbox's own key BEFORE it's instantiated below is what makes it
-        # jump rather than just changing the default on first render.
+        # dropdown to the first checked row, and scopes the "Contacts for all
+        # filtered firms" section below to every checked row (2026-07-29,
+        # multi-row selection enabled per user request -- previously the table
+        # only allowed a single checked row, and that section always showed
+        # every currently-filtered firm regardless of what was checked).
         clicked_rows = table_event["selection"]["rows"] if table_event else []
         if clicked_rows:
             st.session_state["contacts_firm_select"] = df.iloc[clicked_rows[0]]["firm_name"]
+        contacts_scope_df = df.iloc[clicked_rows] if clicked_rows else df
 
-        # --- Contacts for the WHOLE filtered set (2026-07-27, Mayank's
-        # request): "select multiple firms, see all their contacts" turned
-        # out to mean this -- every contact across every currently-filtered
-        # firm, not a multi-row table selection. Reuses the exact same
-        # filtering pattern excel_export.py already uses (prospect_id.isin
-        # (df["id"])), just rendered in-app instead of written to a file, so
-        # this is what actually feeds "email/target these filtered firms."
+        # --- Contacts for the WHOLE filtered set, or for just the checked
+        # rows above if any are checked. Reuses the exact same filtering
+        # pattern excel_export.py already uses (prospect_id.isin(df["id"])),
+        # just rendered in-app instead of written to a file, so this is what
+        # actually feeds "email/target these firms."
         st.divider()
         st.subheader("📋 Contacts for all filtered firms")
-        if df.empty:
+        if contacts_scope_df.empty:
             st.caption("No firms match the current filters.")
         else:
             agg_rows = []
-            for _, row in df.iterrows():
+            for _, row in contacts_scope_df.iterrows():
                 if pd.notna(row.get("contact_name")):
                     agg_rows.append({
                         "Firm": row["firm_name"], "Contact Type": "Main contact",
@@ -344,7 +346,7 @@ with tab_sec:
                     })
             all_contacts = pd.DataFrame([dict(r) for r in db.get_all_contacts()])
             if not all_contacts.empty:
-                extra = all_contacts[all_contacts["prospect_id"].isin(df["id"])]
+                extra = all_contacts[all_contacts["prospect_id"].isin(contacts_scope_df["id"])]
                 for _, c in extra.iterrows():
                     agg_rows.append({
                         "Firm": c["firm_name"], "Contact Type": "Additional contact",
@@ -353,19 +355,20 @@ with tab_sec:
                         "Find This Person": c["linkedin_profile_url"] or "",
                     })
 
+            scope_label = "selected" if clicked_rows else "filtered"
             if not agg_rows:
-                st.caption("No contacts found yet for any of the currently filtered firms.")
+                st.caption(f"No contacts found yet for any of the currently {scope_label} firms.")
             else:
                 agg_df = pd.DataFrame(agg_rows)
                 cap = 300
                 if len(agg_df) > cap:
                     st.caption(
-                        f"{len(agg_df)} contacts match your filters -- showing the first {cap}. "
+                        f"{len(agg_df)} contacts match your {scope_label} firms -- showing the first {cap}. "
                         "Use \"Export to Excel\" below for the complete list."
                     )
                     agg_df = agg_df.head(cap)
                 else:
-                    st.caption(f"{len(agg_df)} contacts across {df['firm_name'].nunique()} filtered firms.")
+                    st.caption(f"{len(agg_df)} contacts across {contacts_scope_df['firm_name'].nunique()} {scope_label} firms.")
                 st.dataframe(
                     agg_df, use_container_width=True, hide_index=True,
                     column_config={
@@ -826,18 +829,20 @@ with tab_nfa:
                 "Also SEC-Registered": st.column_config.CheckboxColumn(),
             },
             on_select="rerun",
-            selection_mode="single-row",
+            selection_mode="multi-row",
             key="nfa_main_table",
         )
         st.caption(
-            "Showing {} of {} NFA firms. To jump to a firm below, hover the "
-            "very left edge of its row until a checkbox appears, then click "
-            "it.".format(len(nfa_df), nfa_total)
+            "Showing {} of {} NFA firms. Hover the very left edge of a row "
+            "until a checkbox appears to select it -- check several to scope "
+            "\"Principals for all filtered firms\" below to just those, or "
+            "one to jump \"Principals by firm\" straight to it.".format(len(nfa_df), nfa_total)
         )
 
         nfa_clicked_rows = nfa_table_event["selection"]["rows"] if nfa_table_event else []
         if nfa_clicked_rows:
             st.session_state["nfa_contacts_firm_select"] = nfa_df.iloc[nfa_clicked_rows[0]]["firm_name"]
+        nfa_principals_scope_df = nfa_df.iloc[nfa_clicked_rows] if nfa_clicked_rows else nfa_df
 
         # --- Bulk CRM stage update, same filtered scope as above ---
         st.divider()
@@ -856,22 +861,23 @@ with tab_nfa:
             st.success(f"Moved {len(nfa_df)} firms to \"{new_stage}\".")
             st.rerun()
 
-        # --- Principals for the WHOLE filtered set (2026-07-27, mirrors the
-        # SEC tab's equivalent addition -- same "select multiple firms" ask,
-        # same fix: every principal across every currently-filtered firm). ---
+        # --- Principals for the WHOLE filtered set, or for just the checked
+        # rows above if any are checked (2026-07-29, mirrors the SEC tab's
+        # equivalent fix -- multi-row selection now scopes this section). ---
         st.divider()
         st.subheader("📋 Principals for all filtered firms")
-        if nfa_df.empty:
+        if nfa_principals_scope_df.empty:
             st.caption("No firms match the current filters.")
         else:
             all_principals = pd.DataFrame([dict(r) for r in nfa_db.get_all_principals()])
             agg_principals = (
-                all_principals[all_principals["firm_id"].isin(nfa_df["id"])]
+                all_principals[all_principals["firm_id"].isin(nfa_principals_scope_df["id"])]
                 if not all_principals.empty else pd.DataFrame()
             )
 
+            nfa_scope_label = "selected" if nfa_clicked_rows else "filtered"
             if agg_principals.empty:
-                st.caption("No principals found yet for any of the currently filtered firms.")
+                st.caption(f"No principals found yet for any of the currently {nfa_scope_label} firms.")
             else:
                 display_principals = agg_principals[[
                     "firm_name", "name", "title", "ten_percent_owner", "email",
@@ -884,14 +890,14 @@ with tab_nfa:
                 cap = 300
                 if len(display_principals) > cap:
                     st.caption(
-                        f"{len(display_principals)} principals match your filters -- showing "
+                        f"{len(display_principals)} principals match your {nfa_scope_label} firms -- showing "
                         f"the first {cap}. Use \"Export to Excel\" below for the complete list."
                     )
                     display_principals = display_principals.head(cap)
                 else:
                     st.caption(
                         f"{len(display_principals)} principals across "
-                        f"{nfa_df['firm_name'].nunique()} filtered firms."
+                        f"{nfa_principals_scope_df['firm_name'].nunique()} {nfa_scope_label} firms."
                     )
                 st.dataframe(
                     display_principals, use_container_width=True, hide_index=True,
