@@ -1,4 +1,4 @@
-"""Museum Mile Funds — marketing/prospecting dashboard. SEC ADV + NFA CPO/CTA tabs."""
+"""Museum Mile Funds marketing/prospecting dashboard. SEC ADV + NFA CPO/CTA tabs."""
 import difflib
 import re
 from datetime import datetime, timezone
@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
 
-from core import config
 from sec import db
 from sec import dedup
 from sec import enrich
@@ -48,13 +47,11 @@ with st.sidebar:
     if not llm_enabled:
         st.caption("Duplicate review and LinkedIn-correction saving are hidden while this is off.")
     else:
-        # Self-test (2026-07-29, requested so a Groq-key-in-Cloud-Secrets
-        # question doesn't need guessing from outside the app): makes one
-        # real API call and reports which backend actually answered, rather
-        # than just checking whether a key string is present. Cloud's
-        # Secrets panel isn't remotely readable by anything outside its own
-        # dashboard, so this in-app button is the only way to get a
-        # definitive yes/no without opening that dashboard directly.
+        # Makes a real API call and reports which backend answered, rather
+        # than just checking whether a key string is present. Streamlit
+        # Cloud's Secrets panel isn't readable from outside the dashboard,
+        # so this is the only way to confirm the key works without opening
+        # Cloud settings directly.
         if st.button("🔧 Test LLM connection"):
             with st.spinner("Calling Groq (falls back to local Ollama if that fails)..."):
                 response, model = llm.chat("Reply with exactly: OK")
@@ -160,9 +157,9 @@ with tab_sec:
     # --- Metrics ---
     @st.cache_data(show_spinner=False)
     def _count_new_sec_entries(cache_fetched_at: str) -> int:
-        """Cached per SEC cache refresh (keyed by fetched_at) — get_adv_candidates()
+        """Cached per SEC cache refresh (keyed by fetched_at). get_adv_candidates()
         already filters to firms not yet in prospects.db, so its length is exactly
-        'how many new entries are available to ingest'. Avoids re-scanning the
+        how many new entries are available to ingest. Avoids re-scanning the
         ~17k-row cache on every dashboard rerun."""
         try:
             return len(ingest_sec_adv.get_adv_candidates())
@@ -243,9 +240,9 @@ with tab_sec:
             if not substring_hits.empty:
                 df = substring_hits
             else:
-                # No literal substring match anywhere (typo, abbreviation, word
-                # order, missing legal suffix, etc.) — fall back to closest
-                # matches by name similarity rather than returning nothing.
+                # No literal substring match (typo, abbreviation, missing
+                # legal suffix, etc.). Fall back to closest matches by name
+                # similarity instead of returning nothing.
                 scores = df["firm_name"].apply(
                     lambda name: difflib.SequenceMatcher(None, query, str(name).lower()).ratio()
                 )
@@ -260,9 +257,8 @@ with tab_sec:
         also_nfa_ids = {f["sec_prospect_id"] for f in nfa_db.get_firms() if f["sec_prospect_id"]}
         df = df.assign(also_nfa=df["id"].isin(also_nfa_ids))
 
-        # Row count right under the filters (2026-07-29, Mayank's request) --
-        # previously this only appeared below the table and near export, both
-        # a scroll away from the filter controls themselves.
+        # Row count shown directly under the filters, not just near export,
+        # so it's visible without scrolling.
         st.caption(f"**{len(df)} of {total} firms match your filters.**")
 
         display_cols = [
@@ -285,15 +281,11 @@ with tab_sec:
             use_container_width=True,
             hide_index=True,
             column_config={
-                # Real bug found live 2026-07-27 (Mayank): AUM used to be
-                # pre-formatted into a "$498.6M"-style string before reaching
-                # the table, so Streamlit sorted it alphabetically ("$1.2B" <
-                # "$498.6M" as text) instead of by actual size. Fixed by
-                # keeping AUM numeric and letting NumberColumn's "compact"
-                # format do the M/B/T abbreviation -- no built-in format
-                # combines compact abbreviation with a "$" prefix (checked
-                # Streamlit 1.45's own NumberColumn docs), so the "$" moved
-                # to the column header instead of repeating on every row.
+                # AUM stays numeric so the table sorts by actual size, not
+                # alphabetically as a formatted string ("$1.2B" < "$498.6M"
+                # as text). NumberColumn's "compact" format handles the
+                # M/B/T abbreviation; the "$" moves to the header since no
+                # built-in format combines both.
                 "AUM ($)": st.column_config.NumberColumn(format="compact"),
                 "Verified": st.column_config.CheckboxColumn(),
                 "Website": st.column_config.LinkColumn(display_text=r"https?://(?:www\.)?([^/]+)"),
@@ -312,24 +304,17 @@ with tab_sec:
             "to jump \"Contacts by firm\" straight to it.".format(len(df), total)
         )
 
-        # Clicking a row's checkbox above (hover the far-left edge of the row
-        # to reveal it -- clicking the row's text does nothing, verified via
-        # live browser testing 2026-07-20) jumps the "Contacts by firm"
-        # dropdown to the first checked row, and scopes the "Contacts for all
-        # filtered firms" section below to every checked row (2026-07-29,
-        # multi-row selection enabled per user request -- previously the table
-        # only allowed a single checked row, and that section always showed
-        # every currently-filtered firm regardless of what was checked).
+        # Checking a row (hover the far-left edge to reveal the checkbox)
+        # jumps "Contacts by firm" to the first checked row, and scopes
+        # "Contacts for all filtered firms" below to every checked row.
         clicked_rows = table_event["selection"]["rows"] if table_event else []
         if clicked_rows:
             st.session_state["contacts_firm_select"] = df.iloc[clicked_rows[0]]["firm_name"]
         contacts_scope_df = df.iloc[clicked_rows] if clicked_rows else df
 
-        # --- Contacts for the WHOLE filtered set, or for just the checked
-        # rows above if any are checked. Reuses the exact same filtering
-        # pattern excel_export.py already uses (prospect_id.isin(df["id"])),
-        # just rendered in-app instead of written to a file, so this is what
-        # actually feeds "email/target these firms."
+        # --- Contacts for the checked rows, or the whole filtered set if
+        # nothing is checked. Uses the same filtering pattern as
+        # excel_export.py, rendered in-app instead of written to a file. ---
         st.divider()
         st.subheader("📋 Contacts for all filtered firms")
         if contacts_scope_df.empty:
@@ -421,17 +406,14 @@ with tab_sec:
                 )
 
             # --- LinkedIn mismatch correction for the selected firm ---
-            # A human has already confirmed the real name/firm on a live
-            # LinkedIn account; the LLM's only job is parsing that free-text
-            # description into a structured value -- see
-            # core/linkedin_override.py for why this is safe where guessing
-            # a brand name from scratch wouldn't be.
+            # A human has already confirmed the real name on LinkedIn; the
+            # LLM only parses that free-text description into a structured
+            # value. See core/linkedin_override.py for the reasoning.
             if llm_enabled:
                 st.markdown("**Correct a LinkedIn mismatch for this firm**")
                 # Keyed on a version counter, bumped after every successful
-                # save, so the box remounts empty -- popping the plain key
-                # alone doesn't reliably clear a text_area's browser-side
-                # value on rerun (verified live 2026-07-20).
+                # save, so the box remounts empty. Popping the key alone
+                # doesn't reliably clear a text_area's browser-side value.
                 sec_correction_version = st.session_state.setdefault("sec_correction_version", 0)
                 correction_text = st.text_area(
                     "Describe the correction, or paste a LinkedIn profile URL. "
@@ -446,9 +428,9 @@ with tab_sec:
                     else:
                         pasted_url = linkedin_override.extract_profile_url(correction_text.strip())
                     if pasted_url:
-                        # A real profile URL is the confirmed answer itself --
-                        # no LLM call needed, and it must never be regenerated
-                        # by a future re-enrichment pass.
+                        # A real profile URL is the confirmed answer itself.
+                        # No LLM call needed, and it must never be
+                        # regenerated by a future re-enrichment pass.
                         db.update_prospect(
                             selected_id, linkedin_profile_url=pasted_url, linkedin_url_confirmed=1,
                         )
@@ -498,17 +480,12 @@ with tab_sec:
                 path = excel_export.export_prospects(df, state_filter, city_filter, narrowed_aum_range)
                 st.session_state["sec_export_current_bytes"] = path.read_bytes()
                 st.session_state["sec_export_current_name"] = path.name
-            # Real bug found live 2026-07-28 (Mayank): on Streamlit Cloud,
-            # "Saved to {path}" pointed at /mount/src/museum-miles/... --
-            # the CLOUD SERVER's own filesystem, not Mayank's computer. There
-            # is no way to browse to it; it's also wiped on every redeploy.
-            # Writing to disk only ever worked for local runs, where the app
-            # and the user share a filesystem. download_button actually
-            # streams the file to the browser -- works locally too, strict
-            # improvement. Cached in session_state so the download button
-            # survives the rerun its own click triggers (a plain local
-            # variable would vanish, since st.button's True state only lasts
-            # for the run it was clicked in).
+            # download_button streams the file to the browser. Writing to
+            # disk and reporting the path only works for local runs, where
+            # the app and the user share a filesystem; on Streamlit Cloud
+            # that path is the server's own filesystem, unreachable and
+            # wiped on redeploy. Cached in session_state so the download
+            # button survives the rerun its own click triggers.
             if "sec_export_current_bytes" in st.session_state:
                 st.download_button(
                     "⬇️ Download Excel file",
@@ -536,7 +513,7 @@ with tab_sec:
                     key="sec_export_full_download",
                 )
 
-        # --- LinkedIn exports, same filtered scope as above (2026-07-29) ---
+        # --- LinkedIn exports, same filtered scope as above ---
         st.divider()
         st.subheader("🔗 Export for LinkedIn Campaign Manager")
         linkedin_cols = st.columns(2)
@@ -659,7 +636,7 @@ with tab_sec:
                 )
                 st.rerun()
 
-        # --- Duplicate review (Phase 2 LLM dedup) — hidden while the LLM toggle is off ---
+        # --- Duplicate review, hidden while the LLM toggle is off ---
         if llm_enabled:
             st.divider()
             st.subheader("🔁 Possible duplicates")
@@ -804,8 +781,7 @@ with tab_nfa:
 
         nfa_df = nfa_df.assign(also_sec=nfa_df["sec_prospect_id"].notna())
 
-        # Row count right under the filters -- see the SEC tab's identical
-        # addition above for why (Mayank's request, 2026-07-29).
+        # Row count shown directly under the filters, same as the SEC tab.
         st.caption(f"**{len(nfa_df)} of {nfa_total} firms match your filters.**")
 
         nfa_display_cols = [
@@ -844,26 +820,8 @@ with tab_nfa:
             st.session_state["nfa_contacts_firm_select"] = nfa_df.iloc[nfa_clicked_rows[0]]["firm_name"]
         nfa_principals_scope_df = nfa_df.iloc[nfa_clicked_rows] if nfa_clicked_rows else nfa_df
 
-        # --- Bulk CRM stage update, same filtered scope as above ---
-        st.divider()
-        st.subheader("🏷️ Update CRM stage for filtered firms")
-        st.caption(
-            f"Moves all {len(nfa_df)} currently filtered NFA firms to the chosen "
-            "stage, using the same pipeline stages as the SEC tab. Outreach "
-            "itself (cold email or LinkedIn) isn't built yet; this just tracks "
-            "where each firm stands once that starts."
-        )
-        stage_cols = st.columns([3, 1])
-        new_stage = stage_cols[0].selectbox("New stage", config.STATUS_STAGES, key="nfa_crm_stage_select")
-        if stage_cols[1].button(f"Apply to {len(nfa_df)} firms"):
-            for fid in nfa_df["id"].tolist():
-                nfa_db.update_firm(int(fid), crm_stage=new_stage)
-            st.success(f"Moved {len(nfa_df)} firms to \"{new_stage}\".")
-            st.rerun()
-
-        # --- Principals for the WHOLE filtered set, or for just the checked
-        # rows above if any are checked (2026-07-29, mirrors the SEC tab's
-        # equivalent fix -- multi-row selection now scopes this section). ---
+        # --- Principals for the checked rows, or the whole filtered set if
+        # nothing is checked. Mirrors the SEC tab's Contacts section. ---
         st.divider()
         st.subheader("📋 Principals for all filtered firms")
         if nfa_principals_scope_df.empty:
@@ -942,9 +900,9 @@ with tab_nfa:
                 )
 
             # --- LinkedIn mismatch correction for the selected firm ---
-            # Same mechanism as the SEC tab (see core/linkedin_override.py) --
-            # a firm can have several principals here, so the correction also
-            # needs to say which one (if any) a person-name fix applies to.
+            # Same mechanism as the SEC tab (core/linkedin_override.py). A
+            # firm can have several principals, so the correction also
+            # needs to say which one a person-name fix applies to.
             selected_nfa_row = nfa_df.loc[nfa_df["firm_name"] == selected_nfa_firm].iloc[0]
             if llm_enabled:
                 st.markdown("**Correct a LinkedIn mismatch for this firm**")
@@ -974,9 +932,9 @@ with tab_nfa:
                     if pasted_url and not principal_choice:
                         st.warning("A pasted profile URL applies to one specific person. Pick which principal it belongs to above first.")
                     elif pasted_url:
-                        # A real profile URL is the confirmed answer itself --
-                        # no LLM call needed, and it must never be regenerated
-                        # by a future re-enrichment pass.
+                        # A real profile URL is the confirmed answer itself.
+                        # No LLM call needed, and it must never be
+                        # regenerated by a future re-enrichment pass.
                         p = next(p for p in principal_dicts if p["name"] == principal_choice)
                         nfa_db.update_principal(p["id"], linkedin_profile_url=pasted_url, linkedin_url_confirmed=1)
                         st.success(f"Saved confirmed profile link for {principal_choice}: {pasted_url}")
@@ -1002,8 +960,8 @@ with tab_nfa:
                                 nfa_db.update_principal(p["id"], linkedin_person_override=parsed["person_override"], linkedin_profile_url=new_url)
                             elif parsed["firm_override"]:
                                 # A firm-name-only correction still changes every
-                                # principal's search URL -- regenerate them all now
-                                # instead of waiting for a future re-enrichment pass.
+                                # principal's search URL. Regenerate them all now
+                                # instead of waiting for a future re-enrichment.
                                 for p in principal_dicts:
                                     person_name = p.get("linkedin_person_override") or p["name"]
                                     new_url = linkedin_url.build_person_url(person_name, effective_firm, hq_state)
@@ -1030,9 +988,8 @@ with tab_nfa:
                 path = nfa_excel_export.export_firms(nfa_df, nfa_state_filter, reg_type_filter)
                 st.session_state["nfa_export_current_bytes"] = path.read_bytes()
                 st.session_state["nfa_export_current_name"] = path.name
-            # See the SEC tab's equivalent comment above (Excel export
-            # section) for why this is a download_button, not "Saved to
-            # {path}" -- same fix, same reason.
+            # download_button, not a saved-path message -- see the SEC
+            # tab's equivalent Excel export section for why.
             if "nfa_export_current_bytes" in st.session_state:
                 st.download_button(
                     "⬇️ Download Excel file",
@@ -1059,12 +1016,9 @@ with tab_nfa:
                     key="nfa_export_full_download",
                 )
 
-        # --- LinkedIn company list export, same filtered scope as above
-        # (2026-07-29) -- see the SEC tab's equivalent section for the
-        # verification caveat on this format. No NFA contact-list exporter
-        # exists yet (sec/linkedin_export.py's counterpart was never built
-        # for the NFA side) -- flagged rather than built here since it wasn't
-        # asked for; can build on request. ---
+        # --- LinkedIn company list export, same filtered scope as above.
+        # No NFA contact-list exporter exists yet (only the company-list
+        # format is built for this tab). ---
         st.divider()
         st.subheader("🔗 Export for LinkedIn Campaign Manager")
         st.caption(
