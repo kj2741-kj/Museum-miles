@@ -153,8 +153,12 @@ def cache_status() -> dict | None:
 
 
 def _clean_money(series: pd.Series) -> pd.Series:
+    # 2026-07-29 fix: stripping ".00" as a literal substring also emptied
+    # out values that were exactly ".00" (a genuine $0 AUM), which
+    # pd.to_numeric then read as missing. pd.to_numeric parses
+    # "1,234,567.00" correctly on its own, so the strip is removed.
     return pd.to_numeric(
-        series.astype(str).str.replace(",", "", regex=False).str.replace(".00", "", regex=False),
+        series.astype(str).str.replace(",", "", regex=False),
         errors="coerce",
     )
 
