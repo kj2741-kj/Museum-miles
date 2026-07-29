@@ -757,7 +757,7 @@ with tab_nfa:
             key="nfa_firm_search",
         )
 
-        nfa_filter_cols = st.columns(5)
+        nfa_filter_cols = st.columns(4)
         reg_type_options = sorted({
             rt.strip() for types in nfa_df["reg_types"].dropna() for rt in types.split(",")
         })
@@ -769,7 +769,6 @@ with tab_nfa:
         dual_filter = nfa_filter_cols[3].selectbox(
             "SEC dual-registration", ["All", "Only dual-registered (also SEC)", "Only NFA-only firms"],
         )
-        crm_stage_filter = nfa_filter_cols[4].multiselect("CRM stage", config.STATUS_STAGES)
 
         if reg_type_filter:
             nfa_df = nfa_df[nfa_df["reg_types"].apply(
@@ -785,8 +784,6 @@ with tab_nfa:
             nfa_df = nfa_df[nfa_df["sec_prospect_id"].notna()]
         elif dual_filter == "Only NFA-only firms":
             nfa_df = nfa_df[nfa_df["sec_prospect_id"].isna()]
-        if crm_stage_filter:
-            nfa_df = nfa_df[nfa_df["crm_stage"].isin(crm_stage_filter)]
 
         if nfa_firm_search.strip():
             query = nfa_firm_search.strip().lower()
