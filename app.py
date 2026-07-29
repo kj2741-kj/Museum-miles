@@ -18,6 +18,9 @@ from cftc import nfa_excel_export
 from core import settings
 from core import linkedin_url
 from core import linkedin_override
+from core import linkedin_company_list
+from core import llm
+from sec import linkedin_export
 
 ENRICH_BATCH_CAP = 200  # keep a single click bounded; re-click to continue
 
@@ -44,6 +47,33 @@ with st.sidebar:
         st.rerun()
     if not llm_enabled:
         st.caption("Duplicate review and LinkedIn-correction saving are hidden while this is off.")
+    else:
+        # Self-test (2026-07-29, requested so a Groq-key-in-Cloud-Secrets
+        # question doesn't need guessing from outside the app): makes one
+        # real API call and reports which backend actually answered, rather
+        # than just checking whether a key string is present. Cloud's
+        # Secrets panel isn't remotely readable by anything outside its own
+        # dashboard, so this in-app button is the only way to get a
+        # definitive yes/no without opening that dashboard directly.
+        if st.button("🔧 Test LLM connection"):
+            with st.spinner("Calling Groq (falls back to local Ollama if that fails)..."):
+                response, model = llm.chat("Reply with exactly: OK")
+            if model == "groq":
+                st.success("Groq responded -- GROQ_API_KEY is working correctly.")
+            elif model == "ollama":
+                st.warning(
+                    "Groq failed (no/bad key, or unreachable) -- fell back to local "
+                    "Ollama. On Streamlit Cloud this path shouldn't be reachable at "
+                    "all (no Ollama server there), so seeing this on Cloud usually "
+                    "means Groq is the one that's actually broken."
+                )
+            else:
+                st.error(
+                    "Both Groq and Ollama failed. On Streamlit Cloud, this almost "
+                    "always means GROQ_API_KEY isn't set correctly in Settings -> "
+                    "Secrets (check for typos, extra quotes, or the key being "
+                    "revoked/expired on Groq's side)."
+                )
 
     st.divider()
     st.header("SEC ADV Data")
@@ -501,6 +531,62 @@ with tab_sec:
                     file_name=st.session_state["sec_export_full_name"],
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="sec_export_full_download",
+                )
+
+        # --- LinkedIn exports, same filtered scope as above (2026-07-29) ---
+        st.divider()
+        st.subheader("🔗 Export for LinkedIn Campaign Manager")
+        linkedin_cols = st.columns(2)
+        with linkedin_cols[0]:
+            st.caption(
+                "**Company list**: firm name + website domain for the "
+                f"{len(df)} currently filtered prospects, for LinkedIn's "
+                "Matched Audiences \"Company\" upload -- pair with Seniority "
+                "+ Job Function filters in Campaign Manager to reach "
+                "decision-makers, not every employee. Needs 300+ rows to "
+                "upload and must match 300+ real LinkedIn members to go "
+                "live (LinkedIn's own requirement, not ours). Column format "
+                "is a best-effort guess, NOT verified against LinkedIn's own "
+                "template (unlike the contact list below) -- LinkedIn only "
+                "makes that template available inside a logged-in Campaign "
+                "Manager session, no public copy exists to check against."
+            )
+            if st.button("🔗 Build company list CSV"):
+                filename = linkedin_company_list.build_filename(
+                    "sec", "-".join(sorted(state_filter)) if state_filter else "ALL"
+                )
+                path = linkedin_company_list.export_csv(df, "firm_name", "website", filename)
+                st.session_state["sec_li_company_bytes"] = path.read_bytes()
+                st.session_state["sec_li_company_name"] = path.name
+            if "sec_li_company_bytes" in st.session_state:
+                st.download_button(
+                    "⬇️ Download company list CSV",
+                    data=st.session_state["sec_li_company_bytes"],
+                    file_name=st.session_state["sec_li_company_name"],
+                    mime="text/csv",
+                    key="sec_li_company_download",
+                )
+        with linkedin_cols[1]:
+            st.caption(
+                "**Contact list**: named contacts' email/name for the "
+                f"{len(df)} currently filtered prospects, for LinkedIn's "
+                "Matched Audiences \"Contact\" upload -- only reaches people "
+                "whose LinkedIn account uses this exact email, so real "
+                "coverage will be partial (see the Company list export for "
+                "the more reliable approach). Column format IS verified "
+                "directly against LinkedIn's own published template."
+            )
+            if st.button("🔗 Build contact list CSV"):
+                path = linkedin_export.export_csv(df, state_filter, narrowed_aum_range)
+                st.session_state["sec_li_contact_bytes"] = path.read_bytes()
+                st.session_state["sec_li_contact_name"] = path.name
+            if "sec_li_contact_bytes" in st.session_state:
+                st.download_button(
+                    "⬇️ Download contact list CSV",
+                    data=st.session_state["sec_li_contact_bytes"],
+                    file_name=st.session_state["sec_li_contact_name"],
+                    mime="text/csv",
+                    key="sec_li_contact_download",
                 )
 
         # --- Retry previously-failed, scoped to whatever is currently filtered above ---
@@ -969,3 +1055,37 @@ with tab_nfa:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="nfa_export_full_download",
                 )
+
+        # --- LinkedIn company list export, same filtered scope as above
+        # (2026-07-29) -- see the SEC tab's equivalent section for the
+        # verification caveat on this format. No NFA contact-list exporter
+        # exists yet (sec/linkedin_export.py's counterpart was never built
+        # for the NFA side) -- flagged rather than built here since it wasn't
+        # asked for; can build on request. ---
+        st.divider()
+        st.subheader("🔗 Export for LinkedIn Campaign Manager")
+        st.caption(
+            "**Company list**: firm name + website domain for the "
+            f"{len(nfa_df)} currently filtered NFA firms, for LinkedIn's "
+            "Matched Audiences \"Company\" upload -- pair with Seniority + "
+            "Job Function filters in Campaign Manager to reach "
+            "decision-makers, not every employee. Needs 300+ rows to upload "
+            "and must match 300+ real LinkedIn members to go live. Column "
+            "format is a best-effort guess, not verified against LinkedIn's "
+            "own template (no public copy exists to check against)."
+        )
+        if st.button("🔗 Build company list CSV", key="nfa_li_company_build"):
+            filename = linkedin_company_list.build_filename(
+                "nfa", "-".join(sorted(nfa_state_filter)) if nfa_state_filter else "ALL"
+            )
+            path = linkedin_company_list.export_csv(nfa_df, "firm_name", "website", filename)
+            st.session_state["nfa_li_company_bytes"] = path.read_bytes()
+            st.session_state["nfa_li_company_name"] = path.name
+        if "nfa_li_company_bytes" in st.session_state:
+            st.download_button(
+                "⬇️ Download company list CSV",
+                data=st.session_state["nfa_li_company_bytes"],
+                file_name=st.session_state["nfa_li_company_name"],
+                mime="text/csv",
+                key="nfa_li_company_download",
+            )
