@@ -107,6 +107,11 @@ _MIGRATIONS = [
     # link during re-enrichment.
     "ALTER TABLE prospects ADD COLUMN linkedin_url_confirmed INTEGER DEFAULT 0",
     "ALTER TABLE prospect_contacts ADD COLUMN linkedin_url_confirmed INTEGER DEFAULT 0",
+    # One-sentence LLM summary of a firm's strategy/client base/fees, pulled
+    # from its own ADV Part 2 brochure text. Only generated while the LLM
+    # toggle is on, so this stays NULL for firms enriched before the
+    # toggle was flipped or while it's off.
+    "ALTER TABLE prospects ADD COLUMN brochure_summary TEXT",
 ]
 
 

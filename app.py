@@ -376,6 +376,9 @@ with tab_sec:
             selected_row = df.loc[df["firm_name"] == selected_firm].iloc[0]
             selected_id = int(selected_row["id"])
 
+            if pd.notna(selected_row.get("brochure_summary")):
+                st.caption(f"🧠 {selected_row['brochure_summary']}")
+
             contact_rows = []
             if pd.notna(selected_row.get("contact_name")):
                 contact_rows.append({
@@ -635,6 +638,38 @@ with tab_sec:
                     f"{result['still_unverified']} still unconfirmed."
                 )
                 st.rerun()
+
+        # --- Firm strategy summaries, hidden while the LLM toggle is off ---
+        if llm_enabled:
+            st.divider()
+            st.subheader("🧠 Generate firm summaries")
+            needs_summary = df[df["crd_number"].notna() & df["brochure_summary"].isna()]
+            n_needs_summary = len(needs_summary)
+            if n_needs_summary == 0:
+                st.caption("Every filtered firm with a CRD already has a summary.")
+            else:
+                st.caption(
+                    f"{n_needs_summary} of {len(df)} filtered prospects have no strategy "
+                    "summary yet. One sentence per firm, generated from its own SEC ADV "
+                    "brochure text. Shown in \"Contacts by firm\" below."
+                )
+                if st.button(f"🧠 Generate {min(n_needs_summary, ENRICH_BATCH_CAP)} summaries"):
+                    progress = st.progress(0.0)
+                    status_text = st.empty()
+
+                    def _on_summary_progress(done: int, total_n: int) -> None:
+                        progress.progress(done / total_n)
+                        status_text.text(f"{done}/{total_n} processed")
+
+                    summary_ids = needs_summary["id"].tolist()[:ENRICH_BATCH_CAP]
+                    result = enrich.generate_brochure_summaries(summary_ids, progress_callback=_on_summary_progress)
+                    progress.empty()
+                    status_text.empty()
+                    st.success(
+                        f"{result['summarized']} summarized, {result['no_summary']} had no "
+                        "usable brochure text."
+                    )
+                    st.rerun()
 
         # --- Duplicate review, hidden while the LLM toggle is off ---
         if llm_enabled:

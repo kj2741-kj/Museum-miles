@@ -47,6 +47,8 @@ from sec import iapd
 from core import net_status
 from sec import team_page
 from core import linkedin_url
+from core import brochure_summary
+from core import settings
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; MuseumMileResearch/1.0; kj2741@nyu.edu)"}
 
@@ -434,6 +436,14 @@ def _enrich_prospect_inner(prospect: dict) -> dict:
     # — tracks whether Part 2B was actually checked, separate from whether
     # a contact was found by any method (requested for reconciliation).
     base_fields["part2b_status"] = brochure.get("part2b_status")
+
+    # One-sentence strategy summary, reusing the brochure text already
+    # fetched above. Only generated while the LLM toggle is on, so this
+    # stays blank for prospects enriched with it off.
+    if settings.get("llm_enabled") and brochure.get("brochure_text"):
+        summary = brochure_summary.summarize(brochure["brochure_text"])
+        if summary:
+            base_fields["brochure_summary"] = summary
     effective_website = original_website
     website_fields: dict = {}
 
@@ -749,6 +759,46 @@ def reverify_emails(prospect_ids: list[int], progress_callback=None, max_workers
             else:
                 results["still_unverified"] += 1
             results["checked"] += 1
+            done += 1
+            if progress_callback:
+                progress_callback(done, len(to_process))
+    return results
+
+
+def _summarize_one(pid: int, crd: str) -> tuple[int, str | None]:
+    brochure_id = iapd.get_brochure_version_id(crd)
+    text = iapd.fetch_brochure_text(brochure_id) if brochure_id else None
+    if not text:
+        return pid, None
+    return pid, brochure_summary.summarize(text)
+
+
+def generate_brochure_summaries(prospect_ids: list[int], progress_callback=None, max_workers: int = 5) -> dict:
+    """Backfill a one-sentence strategy summary for prospects enriched
+    before this feature existed or with the LLM toggle off. Re-fetches the
+    brochure (not persisted from the original enrichment pass) since only
+    the extracted name/website/email were kept, not the raw text. Skips
+    prospects with no CRD or an existing summary."""
+    results = {"summarized": 0, "no_summary": 0, "skipped": 0}
+
+    to_process = []
+    for pid in prospect_ids:
+        prospect = dict(db.get_prospect(pid))
+        if not prospect.get("crd_number") or prospect.get("brochure_summary"):
+            results["skipped"] += 1
+        else:
+            to_process.append((pid, prospect["crd_number"]))
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_summarize_one, pid, crd): pid for pid, crd in to_process}
+        for future in as_completed(futures):
+            pid, summary = future.result()
+            if summary:
+                db.update_prospect(pid, brochure_summary=summary)
+                results["summarized"] += 1
+            else:
+                results["no_summary"] += 1
             done += 1
             if progress_callback:
                 progress_callback(done, len(to_process))

@@ -611,7 +611,7 @@ def lookup_brochure(crd: str | None) -> dict:
     # failed — a different failure mode than "checked and found nothing").
     # Tracked separately from whether a contact was ultimately found by any
     # method, for reconciliation.
-    result = {"people": [], "website": None, "email": None, "part2b_status": None}
+    result = {"people": [], "website": None, "email": None, "part2b_status": None, "brochure_text": None}
     if not crd:
         return result
 
@@ -619,6 +619,7 @@ def lookup_brochure(crd: str | None) -> dict:
     text = fetch_brochure_text(brochure_id) if brochure_id else None
 
     if text:
+        result["brochure_text"] = text
         part2b_people = extract_part2b_people(text)
         result["part2b_status"] = "found" if part2b_people else "not_found"
         _add(part2b_people)
